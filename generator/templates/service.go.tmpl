@@ -1,0 +1,47 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"{{.ModuleName}}/domain"
+)
+
+// {{.AggregateNamePascal}}Service handles commands for the {{.AggregateNamePascal}} aggregate.
+type {{.AggregateNamePascal}}Service struct {
+	eventRepo domain.EventRepository
+}
+
+func New{{.AggregateNamePascal}}Service(repo domain.EventRepository) *{{.AggregateNamePascal}}Service {
+	return &{{.AggregateNamePascal}}Service{eventRepo: repo}
+}
+
+// load replays all events for an aggregate instance from the event store.
+func (s *{{.AggregateNamePascal}}Service) load(ctx context.Context, id string) (*domain.{{.AggregateNamePascal}}, error) {
+	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.AggregateNamePascal}}AggregateName, 0)
+	if err != nil {
+		return nil, err
+	}
+	agg := domain.New{{.AggregateNamePascal}}()
+	agg.AggregateID = id
+	return agg, agg.Replay(events)
+}
+
+// store appends one event to the event store with optimistic locking.
+func (s *{{.AggregateNamePascal}}Service) store(ctx context.Context, id, eventName string, version, expectedVersion int64, data any) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	e := domain.Event{
+		AggregateName: domain.{{.AggregateNamePascal}}AggregateName,
+		AggregateID:   id,
+		EventName:     eventName,
+		Version:       version,
+		Data:          b,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	_, err = s.eventRepo.StoreAtomic(ctx, e, expectedVersion)
+	return err
+}

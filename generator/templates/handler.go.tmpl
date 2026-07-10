@@ -1,0 +1,31 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"{{.ModuleName}}/service"
+)
+
+// {{.HandlerNamePascal}}Handler handles HTTP requests for {{.HandlerName}}.
+type {{.HandlerNamePascal}}Handler struct {
+	svc *service.{{.AggregateNamePascal}}Service
+}
+
+func New{{.HandlerNamePascal}}Handler(svc *service.{{.AggregateNamePascal}}Service) *{{.HandlerNamePascal}}Handler {
+	return &{{.HandlerNamePascal}}Handler{svc: svc}
+}
+
+// Handle processes the HTTP request.
+// TODO: implement request parsing and response.
+func (h *{{.HandlerNamePascal}}Handler) Handle(w http.ResponseWriter, r *http.Request) {
+	// TODO: parse request body
+	// var req struct{ ... }
+	// if err := json.NewDecoder(r.Body).Decode(&req); err != nil { ... }
+
+	// TODO: call service
+	// if err := h.svc.DoSomething(r.Context(), ...); err != nil { ... }
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
+}

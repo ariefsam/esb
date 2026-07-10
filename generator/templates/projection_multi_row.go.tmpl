@@ -1,0 +1,11 @@
+package projection
+
+// {{.ProjectionNamePascal}}Row is the read-model row for the {{.ProjectionName}} projection.
+// It aggregates events from: {{range $i, $a := .AggregateNames}}{{if $i}}, {{end}}{{$a}}{{end}}.
+type {{.ProjectionNamePascal}}Row struct {
+	ID string `gorm:"primaryKey"`
+	// TODO: add read-model fields
+	UpdatedAt int64 `gorm:"not null;default:0"`
+}
+
+func ({{.ProjectionNamePascal}}Row) TableName() string { return "{{.TableName}}" }

@@ -1,0 +1,79 @@
+package projection
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+)
+
+// {{.AggregateNamePascal}}ProjectionWorker keeps the {{.AggregateNamePascal}} read model up to date
+// by long-polling the event store and applying events transactionally.
+type {{.AggregateNamePascal}}ProjectionWorker struct {
+	esClient *eventstore.Client
+	db       *gorm.DB
+}
+
+func New{{.AggregateNamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.AggregateNamePascal}}ProjectionWorker {
+	return &{{.AggregateNamePascal}}ProjectionWorker{esClient: esClient, db: db}
+}
+
+func (w *{{.AggregateNamePascal}}ProjectionWorker) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		cursor := w.readCursor(ctx)
+		events, err := w.esClient.EventsAll(ctx, []string{"{{.AggregateNameKebab}}"}, uint(cursor), 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.AggregateName}} projection: fetch error: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		for _, e := range events {
+			if err := w.applyEvent(ctx, e); err != nil {
+				log.Printf("{{.AggregateName}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
+			}
+		}
+	}
+}
+
+func (w *{{.AggregateNamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+	var row ProjectionCursorRow
+	w.db.WithContext(ctx).Where("name = ?", "{{.AggregateName}}").First(&row)
+	return row.AfterID
+}
+
+func (w *{{.AggregateNamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
+	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch e.EventName {
+		// esb:inject:applyevent-cases
+		default:
+			_ = domain.{{.AggregateNamePascal}}AggregateName // keep import
+		}
+
+		cursorCol := clause.Column{Name: "name"}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{cursorCol},
+			DoUpdates: clause.AssignmentColumns([]string{"after_id", "updated_at"}),
+		}).Create(&ProjectionCursorRow{
+			Name:      "{{.AggregateName}}",
+			AfterID:   int64(e.ID),
+			UpdatedAt: e.TimeMillis,
+		}).Error
+	})
+}
+
+// keep json import alive until first event is added
+var _ = json.Unmarshal

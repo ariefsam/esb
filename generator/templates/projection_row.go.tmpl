@@ -1,0 +1,12 @@
+package projection
+
+// {{.AggregateNamePascal}}Row is the read-model row for the {{.AggregateNamePascal}} aggregate.
+type {{.AggregateNamePascal}}Row struct {
+	AggregateID string `gorm:"primaryKey"`
+	// TODO: add read-model fields
+	Version   int64 `gorm:"not null;default:0"`
+	CreatedAt int64 `gorm:"not null;default:0"`
+	UpdatedAt int64 `gorm:"not null;default:0"`
+}
+
+func ({{.AggregateNamePascal}}Row) TableName() string { return "{{.TableName}}" }
