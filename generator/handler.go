@@ -30,7 +30,7 @@ func AddHandler(handlerName, aggregateName string) error {
 	fmt.Printf("  create  %s\n", dest)
 
 	// Inject route into server/routes.go
-	routeEntry := "\t// TODO: router.HandleFunc(\"/"+naming.ToKebabCase(handlerName)+"\", app."+data.HandlerNamePascal+"Handler.Handle).Methods(http.MethodPost)"
+	routeEntry := "\t// TODO: router.HandleFunc(\"/" + naming.ToKebabCase(handlerName) + "\", app." + data.HandlerNamePascal + "Handler.Handle).Methods(http.MethodPost)"
 	if ok, _ := injector.AlreadyContains("server/routes.go", data.HandlerNamePascal+"Handler"); !ok {
 		if err := injector.InjectAfterMarker("server/routes.go", "// esb:inject:routes", routeEntry); err != nil {
 			fmt.Printf("  warn    %v\n", err)
