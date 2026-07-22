@@ -149,6 +149,9 @@ func readModuleName(path string) (string, error) {
 			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
 	return "", fmt.Errorf("module directive not found in %s", path)
 }
 
@@ -246,6 +249,10 @@ var applyCaseRegex = regexp.MustCompile(`case\s+"([A-Z][A-Za-z0-9]+)"`)
 // extractEvents returns event names anchored to either generated event
 // declaration comments or case branches inside Apply(). Declaration order is
 // preserved, followed by any Apply-only event names.
+//
+// Apply() detection tracks brace depth rather than relying on gofmt-style
+// top-level closing braces so that non-gofmt files (or hand-edited Apply
+// bodies) do not leak the inApply flag into unrelated code below.
 func extractEvents(path string) ([]string, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -264,6 +271,7 @@ func extractEvents(path string) ([]string, error) {
 	lines := strings.Split(string(src), "\n")
 	pendingGeneratedEvent := ""
 	inApply := false
+	applyDepth := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -283,15 +291,43 @@ func extractEvents(path string) ([]string, error) {
 			}
 		}
 
-		if strings.HasPrefix(trimmed, "func ") && strings.Contains(trimmed, "Apply(") {
+		if !inApply && strings.HasPrefix(trimmed, "func ") && strings.Contains(trimmed, "Apply(") {
+			// Enter Apply on the opening brace of the function body —
+			// not the signature line — so signatures that contain
+			// braces (rare) do not skew the depth count.
 			inApply = true
+			applyDepth = 0
+			if open := strings.Index(trimmed, "{"); open != -1 {
+				applyDepth = 1
+				if close := strings.LastIndex(trimmed, "}"); close > open {
+					applyDepth = 0
+				}
+			}
 			continue
 		}
-		if inApply && strings.HasPrefix(line, "}") {
-			inApply = false
-			continue
-		}
+
 		if inApply {
+			// Count net braces on this line so we leave Apply only when
+			// the matching close brace brings depth back to 0.
+			for _, r := range line {
+				switch r {
+				case '{':
+					applyDepth++
+				case '}':
+					applyDepth--
+					if applyDepth <= 0 {
+						inApply = false
+						applyDepth = 0
+						break
+					}
+				}
+				if !inApply {
+					break
+				}
+			}
+			if !inApply {
+				continue
+			}
 			if m := applyCaseRegex.FindStringSubmatch(trimmed); m != nil {
 				add(m[1])
 			}
@@ -342,7 +378,10 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 }
 
 // aggregateNamesVarRegex matches `var <name>AggregateNames = []string{`.
-var aggregateNamesVarRegex = regexp.MustCompile(`var\s+(\w+)AggregateNames\s*=\s*\[\]string\{`)
+// The captured prefix (group 1) is the worker-specific identifier that
+// must be matched against the current worker file name before we treat the
+// declaration as belonging to this worker.
+var aggregateNamesVarRegex = regexp.MustCompile(`var\s+(\w+)AggregateNames\s*=\s*\[\]string\s*\{`)
 
 // switchAggNameRegex matches `switch e.AggregateName {` inside applyEvent.
 var switchAggNameRegex = regexp.MustCompile(`switch\s+e\.AggregateName\b`)
@@ -353,6 +392,12 @@ var switchEventNameRegex = regexp.MustCompile(`switch\s+e\.EventName\b`)
 // aggregateLiteralRegex matches a string literal element in the
 // "<name>AggregateNames" slice, e.g.   "order",
 var aggregateLiteralRegex = regexp.MustCompile(`"([a-z][a-z0-9_-]*)"`)
+
+// switchAggCaseRegex matches `case "Xxx":` branches inside a
+// `switch e.AggregateName` block. The aggregate store name is treated as
+// a kebab/snake case identifier, so it matches the same shape as the
+// explicit-list literal above.
+var switchAggCaseRegex = regexp.MustCompile(`case\s+"([a-z][a-z0-9_-]*)"`)
 
 // scanProjections inspects each *_worker.go file in projection/ to decide
 // whether it is multi-aggregate or single, and which aggregates it lists.
@@ -374,6 +419,10 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 			continue
 		}
 		workerName := strings.TrimSuffix(name, "_worker.go")
+		// The generated declaration uses CamelCase ("BalanceAggregateNames"),
+		// so compare prefixes case-insensitively. Lower-casing both sides
+		// also accepts user-edited `var balanceAggregateNames` style.
+		expectedPrefix := strings.ToLower(naming.ToPascalCase(workerName))
 		path := filepath.Join(dir, name)
 		src, err := os.ReadFile(path)
 		if err != nil {
@@ -384,25 +433,46 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 		p := Projection{Name: workerName}
 
 		// Multi-aggregate is detected by either an explicit aggregate list
-		// (var <name>AggregateNames) or a switch on e.AggregateName.
+		// (var <prefix>AggregateNames) or a switch on e.AggregateName.
 		isMulti := false
-		if mm := aggregateNamesVarRegex.FindStringSubmatchIndex(text); mm != nil {
-			isMulti = true
-			// Start at the matched declaration, not the first []string in
-			// the file, then stop at its closing brace.
-			rest := text[mm[1]:]
-			if end := strings.Index(rest, "}"); end != -1 {
-				rest = rest[:end]
+		// Iterate over ALL *AggregateNames declarations and use the one
+		// whose prefix matches the current worker file name. An
+		// unrelated declaration appearing earlier in the file (e.g. a
+		// legacyAggregateNames) must not be silently attributed to
+		// this worker.
+		for _, match := range aggregateNamesVarRegex.FindAllStringSubmatchIndex(text, -1) {
+			sub := aggregateNamesVarRegex.FindStringSubmatch(text[match[0]:match[1]])
+			if len(sub) < 2 {
+				continue
 			}
+			prefix := strings.ToLower(sub[1])
+			if prefix != expectedPrefix {
+				continue
+			}
+			isMulti = true
+			// Start at the matched declaration, not the first []string
+			// in the file, then stop at the matching close brace —
+			// tracked by depth so a literal "}" inside a string does
+			// not truncate early.
+			rest := text[match[0]:]
+			rest = trimToMatchingBrace(rest)
 			for _, lit := range aggregateLiteralRegex.FindAllString(rest, -1) {
 				v := strings.Trim(lit, `"`)
 				if v != "" {
 					p.Aggregates = append(p.Aggregates, v)
 				}
 			}
+			break
 		}
 		if switchAggNameRegex.MatchString(text) {
 			isMulti = true
+			// No matching declaration was found, so derive the aggregate
+			// list from the case branches inside the switch block —
+			// again tracked by brace depth so unrelated code below is not
+			// pulled in.
+			if len(p.Aggregates) == 0 {
+				p.Aggregates = extractSwitchAggregateNames(text)
+			}
 		}
 		p.Multi = isMulti
 
@@ -420,6 +490,95 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 		return m.Projection[i].Name < m.Projection[j].Name
 	})
 	return nil
+}
+
+// trimToMatchingBrace returns the prefix of text up to and including the
+// closing brace that matches the first opening brace. If no opening brace
+// is present, the input is returned unchanged. This prevents the parser
+// from bailing out at the first '}' it sees inside a string literal or
+// nested struct in an unrelated declaration.
+func trimToMatchingBrace(text string) string {
+	open := strings.Index(text, "{")
+	if open == -1 {
+		return text
+	}
+	depth := 0
+	inString := false
+	escape := false
+	for i := open; i < len(text); i++ {
+		c := text[i]
+		if escape {
+			escape = false
+			continue
+		}
+		if c == '\\' {
+			escape = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[:i+1]
+			}
+		}
+	}
+	return text
+}
+
+// extractSwitchAggregateNames walks the lines of a projection worker file
+// and returns the aggregate names declared in `switch e.AggregateName`
+// case branches. Brace depth is tracked so a switch that ends early does
+// not leak into the next function.
+func extractSwitchAggregateNames(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	lines := strings.Split(text, "\n")
+	inSwitch := false
+	depth := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inSwitch {
+			if switchAggNameRegex.MatchString(trimmed) {
+				inSwitch = true
+				depth = 0
+				if open := strings.Index(trimmed, "{"); open != -1 {
+					depth = 1
+				}
+			}
+			continue
+		}
+		for _, r := range line {
+			switch r {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth <= 0 {
+					inSwitch = false
+					depth = 0
+					goto done
+				}
+			}
+		}
+		if m := switchAggCaseRegex.FindStringSubmatch(trimmed); m != nil {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				out = append(out, m[1])
+			}
+		}
+	}
+done:
+	return out
 }
 
 // queryFuncRegex matches the query stubs the generator injects.

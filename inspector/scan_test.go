@@ -334,6 +334,182 @@ var balanceAggregateNames = []string{"order", "payment"}
 	}
 }
 
+// TestScan_MultiProjectionIgnoresUnrelatedAggregateNamesDeclaration is the
+// regression case the review flagged: when a *_worker.go file declares an
+// unrelated *AggregateNames slice before the matching one, the projection
+// must NOT silently inherit the unrelated aggregate list.
+func TestScan_MultiProjectionIgnoresUnrelatedAggregateNamesDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "projection")
+	// The legacy slice appears FIRST. If the prefix is not verified
+	// against the worker name, the parser will mis-attribute
+	// "legacy-aggregate" to balance.
+	if err := os.WriteFile(filepath.Join(dir, "projection", "balance_worker.go"), []byte(`package projection
+
+var legacyAggregateNames = []string{"legacy-aggregate", "another-legacy"}
+var balanceAggregateNames = []string{"order", "payment"}
+`), 0644); err != nil {
+		t.Fatalf("write projection/balance_worker.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Projection) != 1 {
+		t.Fatalf("Projection = %+v, want one projection", got.Projection)
+	}
+	if !equalStrings(got.Projection[0].Aggregates, []string{"order", "payment"}) {
+		t.Fatalf("Aggregates = %v, want [order payment] from the matching declaration", got.Projection[0].Aggregates)
+	}
+	if got.Projection[0].Multi != true {
+		t.Errorf("Multi = false, want true because the matching declaration binds to this worker")
+	}
+}
+
+// TestScan_MultiProjectionDerivesAggregatesFromSwitch exercises the
+// switch-only shape: a worker with `switch e.AggregateName` but no
+// matching aggregate-names declaration. Without derivation, the
+// projection is multi but lists zero aggregates and disappears from the
+// focused view.
+func TestScan_MultiProjectionDerivesAggregatesFromSwitch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "projection")
+	if err := os.WriteFile(filepath.Join(dir, "projection", "balance_worker.go"), []byte(`package projection
+
+func (w *BalanceProjectionWorker) applyEvent(_ interface{}, e eventstore.Event) error {
+	switch e.AggregateName {
+	case "order":
+		return nil
+	case "payment":
+		return nil
+	default:
+		return nil
+	}
+}
+`), 0644); err != nil {
+		t.Fatalf("write projection/balance_worker.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Projection) != 1 {
+		t.Fatalf("Projection = %+v, want one projection", got.Projection)
+	}
+	if !got.Projection[0].Multi {
+		t.Errorf("Multi = false, want true because switch on e.AggregateName was detected")
+	}
+	if !equalStrings(got.Projection[0].Aggregates, []string{"order", "payment"}) {
+		t.Fatalf("Aggregates = %v, want the case branches [order payment]", got.Projection[0].Aggregates)
+	}
+}
+
+// TestScan_ExtractEventsIgnoresLaterCasesWithIndentedCloseBrace guards
+// against the bug where Apply() detection exited on an unindented `}`.
+// A non-gofmt Apply with an indented closing brace used to leave
+// inApply enabled, so case statements in unrelated functions were
+// reported as events.
+func TestScan_ExtractEventsIgnoresLaterCasesWithIndentedCloseBrace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "domain")
+	// Intentionally non-gofmt: closing brace of Apply is indented.
+	if err := os.WriteFile(filepath.Join(dir, "domain", "order.go"), []byte(`package domain
+
+const OrderAggregateName = "order"
+
+func (o *Order) Apply(eventName string, data []byte) error {
+	switch eventName {
+	case "OrderPlaced":
+		return nil
+	}
+	}
+
+func (o *Order) SomeOtherFunction() {
+	case "PhantomEvent":
+		_ = 0
+}
+`), 0644); err != nil {
+		t.Fatalf("write domain/order.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Aggregate) != 1 {
+		t.Fatalf("Aggregate = %+v, want one order aggregate", got.Aggregate)
+	}
+	if !equalStrings(got.Aggregate[0].Events, []string{"OrderPlaced"}) {
+		t.Fatalf("Events = %v, want only [OrderPlaced]; PhantomEvent must not leak in", got.Aggregate[0].Events)
+	}
+}
+
+// TestScan_ReadModuleNamePropagatesIOErrors verifies that an unreadable
+// go.mod surfaces a contextual error instead of being reported as a
+// missing "module" directive. The chmod path exercises os.Open, but the
+// scanner.Err() check (the actual regression) is hit when a single line
+// exceeds bufio.Scanner's 64 KiB buffer.
+func TestScan_ReadModuleNamePropagatesIOErrors(t *testing.T) {
+	t.Run("unreadable file", func(t *testing.T) {
+		dir := t.TempDir()
+		goModPath := filepath.Join(dir, "go.mod")
+		if err := os.WriteFile(goModPath, []byte("module example.com/demo\n"), 0644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+		if err := os.Chmod(goModPath, 0000); err != nil {
+			t.Fatalf("chmod go.mod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(goModPath, 0644) })
+
+		_, err := Scan(dir)
+		if err == nil {
+			t.Skip("sandbox allows reading mode-0000 file; cannot exercise scanner.Err() path here")
+		}
+		if !strings.Contains(err.Error(), goModPath) {
+			t.Fatalf("Scan error = %q, want it to mention %s", err, goModPath)
+		}
+		if strings.Contains(err.Error(), "module directive not found") {
+			t.Fatalf("Scan error = %q, want it to surface the I/O failure rather than 'module directive not found'", err)
+		}
+	})
+
+	t.Run("line exceeds scanner buffer", func(t *testing.T) {
+		dir := t.TempDir()
+		// bufio.Scanner has a default max token size of 64 KiB. A line
+		// longer than that makes scanner.Scan return false with a
+		// non-nil scanner.Err(), which the old code discarded. The huge
+		// line must come before the "module" line so the scanner fails
+		// before finding the directive.
+		huge := strings.Repeat("a", 80*1024)
+		goModPath := filepath.Join(dir, "go.mod")
+		if err := os.WriteFile(goModPath, []byte(huge+"\nmodule example.com/demo\n"), 0644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+
+		_, err := Scan(dir)
+		if err == nil {
+			t.Fatal("Scan returned nil for a go.mod whose line exceeds scanner buffer")
+		}
+		if !strings.Contains(err.Error(), goModPath) {
+			t.Fatalf("Scan error = %q, want it to mention %s", err, goModPath)
+		}
+		if strings.Contains(err.Error(), "module directive not found") {
+			t.Fatalf("Scan error = %q, want it to surface the scanner failure rather than 'module directive not found'", err)
+		}
+	})
+}
+
 func TestScan_PropagatesEntityReadErrors(t *testing.T) {
 	tests := []struct {
 		name string
