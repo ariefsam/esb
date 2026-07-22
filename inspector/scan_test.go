@@ -208,6 +208,45 @@ type Money struct { Currency string }
 	}
 }
 
+func TestScan_EventsExcludeUnrelatedDomainStructs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "domain")
+	if err := os.WriteFile(filepath.Join(dir, "domain", "order.go"), []byte(`package domain
+
+const OrderAggregateName = "order"
+
+type Order struct{}
+type Money struct { Amount int64 }
+type PlaceOrderCommand struct { Total Money }
+type OrderPlaced struct { Total int64 }
+
+func (o *Order) Apply(eventName string, data []byte) error {
+	switch eventName {
+	case "OrderPlaced":
+		return nil
+	default:
+		return nil
+	}
+}
+`), 0644); err != nil {
+		t.Fatalf("write domain/order.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Aggregate) != 1 {
+		t.Fatalf("Aggregate = %+v, want one order aggregate", got.Aggregate)
+	}
+	if !equalStrings(got.Aggregate[0].Events, []string{"OrderPlaced"}) {
+		t.Fatalf("Events = %v, want only the Apply event OrderPlaced", got.Aggregate[0].Events)
+	}
+}
+
 func TestScan_UsesDeclaredAggregateNameForKebabCaseAggregates(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
@@ -218,6 +257,14 @@ func TestScan_UsesDeclaredAggregateNameForKebabCaseAggregates(t *testing.T) {
 const BankAccountAggregateName = "bank-account"
 type BankAccount struct{}
 type BankAccountOpened struct{}
+func (b *BankAccount) Apply(eventName string, data []byte) error {
+	switch eventName {
+	case "BankAccountOpened":
+		return nil
+	default:
+		return nil
+	}
+}
 `), 0644); err != nil {
 		t.Fatalf("write domain/bank_account.go: %v", err)
 	}
@@ -258,6 +305,76 @@ type OpenBankAccountHandler struct { svc *service.BankAccountService }
 	}
 	if len(got.Query) != 1 || got.Query[0].Aggregate != "bank-account" {
 		t.Fatalf("Query = %+v, want the bank-account store name", got.Query)
+	}
+}
+
+func TestScan_MultiProjectionUsesMatchingAggregateNamesDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "projection")
+	if err := os.WriteFile(filepath.Join(dir, "projection", "balance_worker.go"), []byte(`package projection
+
+var unrelated = []string{"not-an-aggregate"}
+var balanceAggregateNames = []string{"order", "payment"}
+`), 0644); err != nil {
+		t.Fatalf("write projection/balance_worker.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Projection) != 1 {
+		t.Fatalf("Projection = %+v, want one projection", got.Projection)
+	}
+	if !equalStrings(got.Projection[0].Aggregates, []string{"order", "payment"}) {
+		t.Fatalf("Aggregates = %v, want the matching declaration values", got.Projection[0].Aggregates)
+	}
+}
+
+func TestScan_PropagatesEntityReadErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{
+			name: "aggregate",
+			path: filepath.Join("domain", "order.go"),
+		},
+		{
+			name: "handler",
+			path: filepath.Join("server", "handler", "place_order.go"),
+		},
+		{
+			name: "projection",
+			path: filepath.Join("projection", "order_worker.go"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+				t.Fatalf("write go.mod: %v", err)
+			}
+			path := filepath.Join(dir, tt.path)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+			}
+			if err := os.Symlink(filepath.Join(dir, "missing-source.go"), path); err != nil {
+				t.Fatalf("symlink %s: %v", path, err)
+			}
+
+			_, err := Scan(dir)
+			if err == nil {
+				t.Fatalf("Scan returned nil for unreadable %s", tt.path)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Fatalf("Scan error = %q, want file context %q", err, path)
+			}
+		})
 	}
 }
 

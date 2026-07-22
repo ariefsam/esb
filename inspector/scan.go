@@ -153,12 +153,9 @@ func readModuleName(path string) (string, error) {
 }
 
 // scanAggregates lists every aggregate file in domain/ and extracts event
-// names. Event names are the union of:
-//   - struct types declared at the top level (not nested),
-//   - `case "Name":` branches inside the Apply() switch.
-//
-// The two sources are cross-validated — a struct with no Apply case, or
-// vice-versa, still appears so the summary reports what the user wrote.
+// names from generated event declaration comments and Apply() case branches.
+// This avoids treating unrelated domain structs as events while retaining
+// generated declarations whose Apply case has not been added successfully.
 func scanAggregates(dir string, m *ProjectModel) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -178,14 +175,21 @@ func scanAggregates(dir string, m *ProjectModel) error {
 		}
 		aggFileName := strings.TrimSuffix(name, ".go")
 		path := filepath.Join(dir, name)
-		aggName, ok := declaredAggregateName(path, aggFileName)
+		aggName, ok, err := declaredAggregateName(path, aggFileName)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			continue
+		}
+		events, err := extractEvents(path)
+		if err != nil {
+			return err
 		}
 		agg := Aggregate{
 			Name:     aggName,
 			FileName: aggFileName,
-			Events:   extractEvents(path),
+			Events:   events,
 		}
 		m.Aggregate = append(m.Aggregate, agg)
 	}
@@ -200,16 +204,16 @@ func scanAggregates(dir string, m *ProjectModel) error {
 // `const OrderAggregateName = "order"`.
 var aggregateDeclRegex = regexp.MustCompile(`(?m)^\s*const\s+([A-Z][A-Za-z0-9]*)AggregateName\s*=\s*"([a-z][a-z0-9_-]*)"`)
 
-func declaredAggregateName(path, fileName string) (string, bool) {
+func declaredAggregateName(path, fileName string) (string, bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("read %s: %w", path, err)
 	}
 	match := aggregateDeclRegex.FindSubmatch(src)
 	if match == nil || string(match[1]) != naming.ToPascalCase(fileName) {
-		return "", false
+		return "", false, nil
 	}
-	return string(match[2]), true
+	return string(match[2]), true, nil
 }
 
 func aggregateNamesByFile(aggregates []Aggregate) map[string]string {
@@ -227,66 +231,73 @@ func aggregateStoreName(names map[string]string, fileName string) string {
 	return fileName
 }
 
-// structEventRegex matches top-level type declarations of the form
-// "type Foo struct" — these are the event structs the generator appends.
+// generatedEventCommentRegex matches comments emitted immediately before
+// generated event declarations, for example "// OrderPlaced event.".
+var generatedEventCommentRegex = regexp.MustCompile(`^//\s+([A-Z][A-Za-z0-9]+)\s+event\.$`)
+
+// structEventRegex matches top-level type declarations. It is only used to
+// confirm a declaration named by a generated event comment; unrelated structs
+// are not events merely because they share the aggregate file.
 var structEventRegex = regexp.MustCompile(`^type\s+([A-Z][A-Za-z0-9]+)\s+struct\b`)
 
 // applyCaseRegex matches `case "Foo":` inside Apply().
 var applyCaseRegex = regexp.MustCompile(`case\s+"([A-Z][A-Za-z0-9]+)"`)
 
-// extractEvents returns the union of event struct names and Apply case
-// names found in the file. The order is preserved (structs first, then
-// any extras from case branches).
-//
-// The aggregate's own root struct (e.g. `type Order struct`) is excluded
-// since it is not an event — only the generated event structs count.
-func extractEvents(path string) []string {
+// extractEvents returns event names anchored to either generated event
+// declaration comments or case branches inside Apply(). Declaration order is
+// preserved, followed by any Apply-only event names.
+func extractEvents(path string) ([]string, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	// File name -> aggregate struct name (the root type to skip).
-	aggPascal := naming.ToPascalCase(strings.TrimSuffix(filepath.Base(path), ".go"))
 
 	seen := map[string]bool{}
 	var out []string
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
 
-	inFn := false
-	for _, line := range strings.Split(string(src), "\n") {
+	lines := strings.Split(string(src), "\n")
+	pendingGeneratedEvent := ""
+	inApply := false
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Top-level type declarations.
-		if !inFn {
-			if m := structEventRegex.FindStringSubmatch(trimmed); m != nil {
-				if m[1] == aggPascal {
-					// The aggregate root, not an event.
+		if !inApply {
+			if m := generatedEventCommentRegex.FindStringSubmatch(trimmed); m != nil {
+				pendingGeneratedEvent = m[1]
+				continue
+			}
+			if pendingGeneratedEvent != "" {
+				if trimmed == "" {
 					continue
 				}
-				if !seen[m[1]] {
-					seen[m[1]] = true
-					out = append(out, m[1])
+				if m := structEventRegex.FindStringSubmatch(trimmed); m != nil && m[1] == pendingGeneratedEvent {
+					add(m[1])
 				}
-				continue
+				pendingGeneratedEvent = ""
 			}
 		}
 
-		// Track entry into Apply() so we ignore switch on other fields.
 		if strings.HasPrefix(trimmed, "func ") && strings.Contains(trimmed, "Apply(") {
-			inFn = true
+			inApply = true
 			continue
 		}
-		// Leave Apply() at the next top-level func or closing brace at col 0.
-		if inFn && (strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(line, "}")) {
-			inFn = false
+		if inApply && strings.HasPrefix(line, "}") {
+			inApply = false
+			continue
 		}
-		if m := applyCaseRegex.FindStringSubmatch(trimmed); m != nil {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				out = append(out, m[1])
+		if inApply {
+			if m := applyCaseRegex.FindStringSubmatch(trimmed); m != nil {
+				add(m[1])
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // handlerServiceRegex matches `svc *service.PascalService` on a struct field.
@@ -312,7 +323,7 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 		path := filepath.Join(dir, name)
 		src, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return fmt.Errorf("read %s: %w", path, err)
 		}
 		agg := ""
 		if mm := handlerServiceRegex.FindStringSubmatch(string(src)); mm != nil {
@@ -366,7 +377,7 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 		path := filepath.Join(dir, name)
 		src, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return fmt.Errorf("read %s: %w", path, err)
 		}
 		text := string(src)
 
@@ -375,22 +386,18 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 		// Multi-aggregate is detected by either an explicit aggregate list
 		// (var <name>AggregateNames) or a switch on e.AggregateName.
 		isMulti := false
-		if mm := aggregateNamesVarRegex.FindStringSubmatch(text); mm != nil {
+		if mm := aggregateNamesVarRegex.FindStringSubmatchIndex(text); mm != nil {
 			isMulti = true
-			// Extract the literal aggregate names from the slice, but
-			// stop at the closing brace so we don't pick up string
-			// literals from log messages, gorm tags, etc.
-			sliceStart := strings.Index(text, "[]string{")
-			if sliceStart != -1 {
-				rest := text[sliceStart:]
-				if end := strings.Index(rest, "}"); end != -1 {
-					rest = rest[:end]
-				}
-				for _, lit := range aggregateLiteralRegex.FindAllString(rest, -1) {
-					v := strings.Trim(lit, `"`)
-					if v != "" {
-						p.Aggregates = append(p.Aggregates, v)
-					}
+			// Start at the matched declaration, not the first []string in
+			// the file, then stop at its closing brace.
+			rest := text[mm[1]:]
+			if end := strings.Index(rest, "}"); end != -1 {
+				rest = rest[:end]
+			}
+			for _, lit := range aggregateLiteralRegex.FindAllString(rest, -1) {
+				v := strings.Trim(lit, `"`)
+				if v != "" {
+					p.Aggregates = append(p.Aggregates, v)
 				}
 			}
 		}

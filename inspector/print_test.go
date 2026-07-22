@@ -114,12 +114,15 @@ func TestPrint_Focus(t *testing.T) {
 		Projection: []Projection{
 			{Name: "order", Multi: false, Aggregates: []string{"order"}},
 			{Name: "balance", Multi: true, Aggregates: []string{"order", "user"}},
+			{Name: "user", Multi: false, Aggregates: []string{"user"}},
 		},
 		Handler: []Handler{
 			{Name: "place_order", Aggregate: "order"},
+			{Name: "register_user", Aggregate: "user"},
 		},
 		Query: []Query{
 			{Name: "GetOrderByBuyer", Aggregate: "order"},
+			{Name: "GetUserByEmail", Aggregate: "user"},
 		},
 		Wire: WireGraph{
 			Fields: []WireNode{
@@ -161,7 +164,12 @@ func TestPrint_Focus(t *testing.T) {
 	if !strings.Contains(got, "service.NewOrderService") {
 		t.Errorf("expected the handler's aggregate service in focused wire graph:\n%s", got)
 	}
-	// Unrelated worker should not appear.
+	// Unrelated focused sections and wire nodes should not appear.
+	for _, unrelated := range []string{"Projections — lainnya", "Handlers — lainnya", "Queries — lainnya", "register_user", "GetUserByEmail"} {
+		if strings.Contains(got, unrelated) {
+			t.Errorf("focused view should not show unrelated content %q:\n%s", unrelated, got)
+		}
+	}
 	if strings.Contains(got, "BalanceProjectionWorker") {
 		t.Errorf("focused view should not show BalanceProjectionWorker:\n%s", got)
 	}
@@ -252,8 +260,7 @@ func TestPrint_FocusMatchesGeneratedInitialismsInWireFields(t *testing.T) {
 }
 
 // TestPrint_LineCount — single-screen promise: a mid-size project should
-// still fit comfortably in a 24-line terminal. We allow some headroom
-// for the rendered ASCII.
+// fit in a conventional 24-line terminal.
 func TestPrint_LineCount(t *testing.T) {
 	m := ProjectModel{
 		ModuleName:  "github.com/example/mid",
@@ -290,12 +297,12 @@ func TestPrint_LineCount(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Print(&buf, m, ""); err != nil {
+	if err := Print(&buf, m, "order"); err != nil {
 		t.Fatalf("Print: %v", err)
 	}
 	lines := strings.Count(buf.String(), "\n")
-	if lines > 80 {
-		t.Errorf("mid-size project printed %d lines, want <= 80", lines)
+	if lines > 24 {
+		t.Errorf("focused mid-size project printed %d lines, want <= 24:\n%s", lines, buf.String())
 	}
 }
 

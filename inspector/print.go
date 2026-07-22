@@ -10,9 +10,8 @@ import (
 )
 
 // Print writes a single-screen summary of m to w. When focus is non-empty,
-// only the parts of the project that touch that aggregate name are shown
-// in detail; the rest appears as a compact header line so the reader does
-// not lose context.
+// only the parts of the project that touch that aggregate name are shown;
+// unrelated aggregate names remain on one compact context line.
 func Print(w io.Writer, m ProjectModel, focus string) error {
 	if focus != "" {
 		resolved, ok := resolveAggregateFocus(m.Aggregate, focus)
@@ -28,7 +27,9 @@ func Print(w io.Writer, m ProjectModel, focus string) error {
 	printProjections(&buf, m, focus)
 	printHandlers(&buf, m, focus)
 	printQueries(&buf, m, focus)
-	printStorage(&buf, m)
+	if focus == "" {
+		printStorage(&buf, m)
+	}
 	printWire(&buf, m, focus)
 	if _, err := io.WriteString(w, buf.String()); err != nil {
 		return fmt.Errorf("write summary: %w", err)
@@ -38,7 +39,9 @@ func Print(w io.Writer, m ProjectModel, focus string) error {
 
 func printHeader(w io.Writer, m ProjectModel, focus string) {
 	fmt.Fprintln(w, "esb show — domain at a glance")
-	fmt.Fprintln(w, strings.Repeat("=", 78))
+	if focus == "" {
+		fmt.Fprintln(w, strings.Repeat("=", 78))
+	}
 	fmt.Fprintf(w, "module:  %s\n", fallback(m.ModuleName, "(tidak terdeteksi)"))
 	fmt.Fprintf(w, "package: %s\n", fallback(m.PackageName, "(tidak terdeteksi)"))
 	if focus != "" {
@@ -48,6 +51,29 @@ func printHeader(w io.Writer, m ProjectModel, focus string) {
 }
 
 func printAggregates(w io.Writer, m ProjectModel, focus string) {
+	if focus != "" {
+		var selected Aggregate
+		var other []string
+		for _, a := range m.Aggregate {
+			if a.Name == focus {
+				selected = a
+			} else {
+				other = append(other, a.Name)
+			}
+		}
+		fmt.Fprintf(w, "Aggregate: >> %s", selected.Name)
+		if len(selected.Events) == 0 {
+			fmt.Fprintln(w, "  (0 events)")
+		} else {
+			fmt.Fprintf(w, "  (%d events: %s)\n", len(selected.Events), strings.Join(selected.Events, ", "))
+		}
+		if len(other) > 0 {
+			fmt.Fprintf(w, "Others:    %s\n", strings.Join(other, ", "))
+		}
+		fmt.Fprintln(w)
+		return
+	}
+
 	fmt.Fprintln(w, "Aggregates")
 	fmt.Fprintln(w, strings.Repeat("-", 78))
 	if len(m.Aggregate) == 0 {
@@ -72,7 +98,9 @@ func printAggregates(w io.Writer, m ProjectModel, focus string) {
 func printProjections(w io.Writer, m ProjectModel, focus string) {
 	render := func(title string, list []Projection) {
 		fmt.Fprintf(w, "Projections — %s\n", title)
-		fmt.Fprintln(w, strings.Repeat("-", 78))
+		if focus == "" {
+			fmt.Fprintln(w, strings.Repeat("-", 78))
+		}
 		if len(list) == 0 {
 			fmt.Fprintln(w, "  (tidak ada)")
 		} else {
@@ -91,20 +119,13 @@ func printProjections(w io.Writer, m ProjectModel, focus string) {
 		render("semua", m.Projection)
 		return
 	}
-	var matching, rest []Projection
+	var matching []Projection
 	for _, p := range m.Projection {
 		if aggregateTouches(p.Aggregates, focus) {
 			matching = append(matching, p)
-		} else {
-			rest = append(rest, p)
 		}
 	}
-	if len(matching) > 0 {
-		render("menyentuh "+focus, matching)
-	}
-	if len(rest) > 0 {
-		render("lainnya", rest)
-	}
+	render("menyentuh "+focus, matching)
 }
 
 func printHandlers(w io.Writer, m ProjectModel, focus string) {
@@ -112,25 +133,20 @@ func printHandlers(w io.Writer, m ProjectModel, focus string) {
 		printHandlerList(w, "Handlers — semua", m.Handler)
 		return
 	}
-	var matching, rest []Handler
+	var matching []Handler
 	for _, h := range m.Handler {
 		if h.Aggregate == focus {
 			matching = append(matching, h)
-		} else {
-			rest = append(rest, h)
 		}
 	}
-	if len(matching) > 0 {
-		printHandlerList(w, "Handlers — "+focus, matching)
-	}
-	if len(rest) > 0 {
-		printHandlerList(w, "Handlers — lainnya", rest)
-	}
+	printHandlerList(w, "Handlers — "+focus, matching)
 }
 
 func printHandlerList(w io.Writer, title string, list []Handler) {
 	fmt.Fprintf(w, "%s\n", title)
-	fmt.Fprintln(w, strings.Repeat("-", 78))
+	if !strings.Contains(title, " — ") || strings.HasSuffix(title, " — semua") {
+		fmt.Fprintln(w, strings.Repeat("-", 78))
+	}
 	if len(list) == 0 {
 		fmt.Fprintln(w, "  (tidak ada)")
 	} else {
@@ -150,25 +166,22 @@ func printQueries(w io.Writer, m ProjectModel, focus string) {
 		printQueryList(w, "Queries", m.Query)
 		return
 	}
-	var matching, rest []Query
+	var matching []Query
 	for _, q := range m.Query {
 		if q.Aggregate == focus {
 			matching = append(matching, q)
-		} else {
-			rest = append(rest, q)
 		}
 	}
 	if len(matching) > 0 {
 		printQueryList(w, "Queries — "+focus, matching)
 	}
-	if len(rest) > 0 {
-		printQueryList(w, "Queries — lainnya", rest)
-	}
 }
 
 func printQueryList(w io.Writer, title string, list []Query) {
 	fmt.Fprintf(w, "%s\n", title)
-	fmt.Fprintln(w, strings.Repeat("-", 78))
+	if !strings.Contains(title, " — ") || strings.HasSuffix(title, " — semua") {
+		fmt.Fprintln(w, strings.Repeat("-", 78))
+	}
 	if len(list) == 0 {
 		fmt.Fprintln(w, "  (tidak ada)")
 	} else {
@@ -202,7 +215,9 @@ func printStorage(w io.Writer, m ProjectModel) {
 
 func printWire(w io.Writer, m ProjectModel, focus string) {
 	fmt.Fprintln(w, "Wire Graph")
-	fmt.Fprintln(w, strings.Repeat("-", 78))
+	if focus == "" {
+		fmt.Fprintln(w, strings.Repeat("-", 78))
+	}
 
 	if len(m.Wire.Fields) == 0 {
 		fmt.Fprintln(w, "  (tidak ada field — app-fields marker kosong)")
@@ -244,12 +259,16 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 			continue
 		}
 		node := nodesByField[f.Field]
-		fmt.Fprintf(w, "  +-- %s  %s\n", f.Field, f.Type)
 		provider := node.Provider
 		if provider == "" {
 			provider = "(no init)"
 		}
-		fmt.Fprintf(w, "  |     %s\n", provider)
+		if focus == "" {
+			fmt.Fprintf(w, "  +-- %s  %s\n", f.Field, f.Type)
+			fmt.Fprintf(w, "  |     %s\n", provider)
+		} else {
+			fmt.Fprintf(w, "  +-- %s  %s  <- %s\n", f.Field, f.Type, provider)
+		}
 	}
 	if focus != "" {
 		for _, n := range m.Wire.Nodes {
