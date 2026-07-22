@@ -171,6 +171,38 @@ func TestScan_MissingMarkerIsTolerant(t *testing.T) {
 	}
 }
 
+// TestScan_FindsAggregatesByDeclaration verifies unrelated domain files do
+// not appear as aggregates merely because they have a .go extension.
+func TestScan_FindsAggregatesByDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "domain")
+	files := map[string]string{
+		"order.go": `package domain
+const OrderAggregateName = "order"
+type Order struct{}
+`,
+		"money.go": `package domain
+type Money struct { Currency string }
+`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, "domain", name), []byte(src), 0644); err != nil {
+			t.Fatalf("write domain/%s: %v", name, err)
+		}
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Aggregate) != 1 || got.Aggregate[0].Name != "order" {
+		t.Fatalf("Aggregate = %+v, want only order", got.Aggregate)
+	}
+}
+
 // equalStrings compares two slices ignoring order, since the scan step
 // sorts internally but the fixtures may emit fields in source order.
 func equalStrings(a, b []string) bool {

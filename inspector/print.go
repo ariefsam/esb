@@ -12,23 +12,31 @@ import (
 // in detail; the rest appears as a compact header line so the reader does
 // not lose context.
 func Print(w io.Writer, m ProjectModel, focus string) error {
-	printHeader(w, m, focus != "")
-	printAggregates(w, m, focus)
-	printProjections(w, m, focus)
-	printHandlers(w, m, focus)
-	printQueries(w, m, focus)
-	printStorage(w, m)
-	printWire(w, m, focus)
+	if focus != "" && !hasAggregate(m.Aggregate, focus) {
+		return fmt.Errorf("aggregate %q tidak ditemukan", focus)
+	}
+
+	var buf strings.Builder
+	printHeader(&buf, m, focus)
+	printAggregates(&buf, m, focus)
+	printProjections(&buf, m, focus)
+	printHandlers(&buf, m, focus)
+	printQueries(&buf, m, focus)
+	printStorage(&buf, m)
+	printWire(&buf, m, focus)
+	if _, err := io.WriteString(w, buf.String()); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
 	return nil
 }
 
-func printHeader(w io.Writer, m ProjectModel, focused bool) {
+func printHeader(w io.Writer, m ProjectModel, focus string) {
 	fmt.Fprintln(w, "esb show — domain at a glance")
 	fmt.Fprintln(w, strings.Repeat("=", 78))
 	fmt.Fprintf(w, "module:  %s\n", fallback(m.ModuleName, "(tidak terdeteksi)"))
 	fmt.Fprintf(w, "package: %s\n", fallback(m.PackageName, "(tidak terdeteksi)"))
-	if focused {
-		fmt.Fprintln(w, "focus:   filtered")
+	if focus != "" {
+		fmt.Fprintf(w, "focus:   %s\n", focus)
 	}
 	fmt.Fprintln(w)
 }
@@ -182,6 +190,7 @@ func printStorage(w io.Writer, m ProjectModel) {
 	} else {
 		fmt.Fprintf(w, "  Run workers: %s\n", strings.Join(m.RunWorker, ", "))
 	}
+	fmt.Fprintln(w, "  Event store: EventRepository -> repository.EventStoreAdapter -> eventstore.Client")
 	fmt.Fprintln(w)
 }
 
@@ -236,9 +245,16 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 		}
 		fmt.Fprintf(w, "  |     %s\n", provider)
 	}
+	if focus != "" {
+		for _, n := range m.Wire.Nodes {
+			if isFocusedServiceNode(n, focus) {
+				fmt.Fprintf(w, "  +-- %s\n", n.Provider)
+			}
+		}
+	}
 	fmt.Fprintln(w)
 
-	// Note if any *Field* in the App graph is not run in main.go.
+	// Note if any projection worker in the App graph is not run in main.go.
 	if focus == "" {
 		var dead []string
 		run := map[string]bool{}
@@ -246,7 +262,7 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 			run[r] = true
 		}
 		for _, f := range m.Wire.Fields {
-			if !run[f.Field] {
+			if !run[f.Field] && strings.HasSuffix(f.Field, "ProjectionWorker") {
 				dead = append(dead, f.Field)
 			}
 		}
@@ -256,6 +272,11 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 			fmt.Fprintln(w)
 		}
 	}
+}
+
+func isFocusedServiceNode(node WireNode, focus string) bool {
+	service := strings.TrimSuffix(node.VarName, "Svc")
+	return service != node.VarName && camelToSnake(service) == focus
 }
 
 // focusedChains returns the PascalCase field names in the wire graph that
@@ -324,6 +345,15 @@ func camelToSnake(s string) string {
 func aggregateTouches(list []string, target string) bool {
 	for _, a := range list {
 		if a == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAggregate(aggregates []Aggregate, target string) bool {
+	for _, aggregate := range aggregates {
+		if aggregate.Name == target {
 			return true
 		}
 	}

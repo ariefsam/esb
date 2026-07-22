@@ -2,6 +2,7 @@ package inspector
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -57,10 +58,12 @@ func TestPrint_FullProject(t *testing.T) {
 		},
 		Wire: WireGraph{
 			Fields: []WireNode{
+				{Field: "BalanceProjectionWorker", Type: "*projection.BalanceProjectionWorker"},
 				{Field: "OrderProjectionWorker", Type: "*projection.OrderProjectionWorker"},
 				{Field: "PlaceOrderHandler", Type: "*handler.PlaceOrderHandler"},
 			},
 			Nodes: []WireNode{
+				{VarName: "balanceWorker", Provider: "projection.NewBalanceProjectionWorker(...)"},
 				{VarName: "orderWorker", Provider: "projection.NewOrderProjectionWorker(...)"},
 				{VarName: "placeOrderHandler", Provider: "handler.NewPlaceOrderHandler(...)"},
 			},
@@ -86,11 +89,15 @@ func TestPrint_FullProject(t *testing.T) {
 		"+-- OrderProjectionWorker",
 		"projection.NewOrderProjectionWorker",
 		"AutoMigrate: OrderRow",
-		"declared but not started: PlaceOrderHandler", // not in RunWorker
+		"Event store: EventRepository -> repository.EventStoreAdapter -> eventstore.Client",
+		"declared but not started: BalanceProjectionWorker",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in output:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "declared but not started: PlaceOrderHandler") {
+		t.Errorf("handlers are request-driven and must not be reported as unstarted workers:\n%s", got)
 	}
 }
 
@@ -120,8 +127,9 @@ func TestPrint_Focus(t *testing.T) {
 				{Field: "PlaceOrderHandler", Type: "*handler.PlaceOrderHandler"},
 			},
 			Nodes: []WireNode{
+				{VarName: "orderSvc", Provider: "service.NewOrderService(...)"},
 				{VarName: "orderWorker", Provider: "projection.NewOrderProjectionWorker(...)"},
-				{VarName: "balanceWorker", Provider: "projection.NewBalanceProjectionWorker(...)"},
+				{VarName: "placeOrderHandler", Provider: "handler.NewPlaceOrderHandler(...)"},
 			},
 		},
 	}
@@ -132,9 +140,12 @@ func TestPrint_Focus(t *testing.T) {
 	}
 	got := buf.String()
 
-	// Focus marker visible on the order aggregate.
+	// Focus marker visible on the order aggregate and names the focus.
 	if !strings.Contains(got, ">> order") {
 		t.Errorf("missing '>> order' focus marker:\n%s", got)
+	}
+	if !strings.Contains(got, "focus:   order") {
+		t.Errorf("missing focused aggregate name in header:\n%s", got)
 	}
 	// user aggregate still appears in the list (compact header).
 	if !strings.Contains(got, "   user") {
@@ -147,9 +158,28 @@ func TestPrint_Focus(t *testing.T) {
 	if !strings.Contains(got, "PlaceOrderHandler") {
 		t.Errorf("expected PlaceOrderHandler in focused wire graph:\n%s", got)
 	}
+	if !strings.Contains(got, "service.NewOrderService") {
+		t.Errorf("expected the handler's aggregate service in focused wire graph:\n%s", got)
+	}
 	// Unrelated worker should not appear.
 	if strings.Contains(got, "BalanceProjectionWorker") {
 		t.Errorf("focused view should not show BalanceProjectionWorker:\n%s", got)
+	}
+}
+
+func TestPrint_UnknownFocusReturnsError(t *testing.T) {
+	m := ProjectModel{Aggregate: []Aggregate{{Name: "order"}}}
+
+	var buf bytes.Buffer
+	err := Print(&buf, m, "missing")
+	if err == nil {
+		t.Fatal("Print returned nil for an unknown aggregate focus")
+	}
+	if !strings.Contains(err.Error(), `aggregate "missing" tidak ditemukan`) {
+		t.Fatalf("Print error = %q, want unknown aggregate message", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("Print wrote partial output before returning the error: %q", buf.String())
 	}
 }
 
@@ -199,5 +229,20 @@ func TestPrint_LineCount(t *testing.T) {
 	if lines > 80 {
 		t.Errorf("mid-size project printed %d lines, want <= 80", lines)
 	}
-	t.Logf("printed %d lines", lines)
+}
+
+func TestPrint_PropagatesWriterErrors(t *testing.T) {
+	err := Print(failingWriter{}, ProjectModel{ModuleName: "example.com/demo"}, "")
+	if err == nil {
+		t.Fatal("Print returned nil for a failing writer")
+	}
+	if !strings.Contains(err.Error(), "write summary") {
+		t.Fatalf("Print error = %q, want write summary context", err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }

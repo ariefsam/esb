@@ -3,10 +3,9 @@
 // and surfaces an in-memory ProjectModel that the printer turns into a
 // single-screen summary.
 //
-// The package is intentionally regex-based: every signal it needs already
-// lives in marker comments that the generator itself respects. As long as
-// the marker format is preserved, scan/print stay in sync with the rest
-// of the scaffolder.
+// The package intentionally scans the stable names, declarations, and marker
+// blocks emitted by the generator, so no generated manifest or extra parser
+// dependency is required.
 package inspector
 
 import (
@@ -176,9 +175,13 @@ func scanAggregates(dir string, m *ProjectModel) error {
 			continue
 		}
 		aggName := strings.TrimSuffix(name, ".go")
+		path := filepath.Join(dir, name)
+		if !declaresAggregate(path, aggName) {
+			continue
+		}
 		agg := Aggregate{
 			Name:   aggName,
-			Events: extractEvents(filepath.Join(dir, name)),
+			Events: extractEvents(path),
 		}
 		m.Aggregate = append(m.Aggregate, agg)
 	}
@@ -187,6 +190,19 @@ func scanAggregates(dir string, m *ProjectModel) error {
 		return m.Aggregate[i].Name < m.Aggregate[j].Name
 	})
 	return nil
+}
+
+// aggregateDeclRegex matches generated aggregate constants such as
+// `const OrderAggregateName = "order"`.
+var aggregateDeclRegex = regexp.MustCompile(`(?m)^\s*const\s+([A-Z][A-Za-z0-9]*)AggregateName\s*=`)
+
+func declaresAggregate(path, name string) bool {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	match := aggregateDeclRegex.FindSubmatch(src)
+	return match != nil && string(match[1]) == naming.ToPascalCase(name)
 }
 
 // structEventRegex matches top-level type declarations of the form
