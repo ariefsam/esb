@@ -24,7 +24,7 @@ import (
 type ProjectModel struct {
 	ModuleName  string
 	PackageName string
-	Aggregate   []Aggregate // every aggregate discovered in domain/, sorted by file name
+	Aggregate   []Aggregate // every aggregate discovered in domain/, sorted by aggregate-store name
 	Projection  []Projection
 	Handler     []Handler
 	Query       []Query
@@ -35,8 +35,9 @@ type ProjectModel struct {
 
 // Aggregate is one file in domain/ (excluding event.go / errors.go).
 type Aggregate struct {
-	Name   string // snake_case file name (without .go)
-	Events []string
+	Name     string // aggregate-store name from the generated constant (for example "bank-account")
+	FileName string // snake_case file name (without .go), used to identify the root struct
+	Events   []string
 }
 
 // Projection is one projection worker. Multi is true when the worker
@@ -110,13 +111,14 @@ func Scan(rootDir string) (ProjectModel, error) {
 	if err := scanAggregates(filepath.Join(rootDir, "domain"), &m); err != nil {
 		return m, err
 	}
-	if err := scanHandlers(filepath.Join(rootDir, "server", "handler"), &m); err != nil {
+	aggregateNames := aggregateNamesByFile(m.Aggregate)
+	if err := scanHandlers(filepath.Join(rootDir, "server", "handler"), aggregateNames, &m); err != nil {
 		return m, err
 	}
-	if err := scanProjections(filepath.Join(rootDir, "projection"), &m); err != nil {
+	if err := scanProjections(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
 		return m, err
 	}
-	if err := scanQueries(filepath.Join(rootDir, "projection", "query.go"), &m); err != nil {
+	if err := scanQueries(filepath.Join(rootDir, "projection", "query.go"), aggregateNames, &m); err != nil {
 		return m, err
 	}
 	if err := scanWire(filepath.Join(rootDir, "wire", "wire.go"), &m); err != nil {
@@ -174,14 +176,16 @@ func scanAggregates(dir string, m *ProjectModel) error {
 		if name == "event.go" || name == "errors.go" {
 			continue
 		}
-		aggName := strings.TrimSuffix(name, ".go")
+		aggFileName := strings.TrimSuffix(name, ".go")
 		path := filepath.Join(dir, name)
-		if !declaresAggregate(path, aggName) {
+		aggName, ok := declaredAggregateName(path, aggFileName)
+		if !ok {
 			continue
 		}
 		agg := Aggregate{
-			Name:   aggName,
-			Events: extractEvents(path),
+			Name:     aggName,
+			FileName: aggFileName,
+			Events:   extractEvents(path),
 		}
 		m.Aggregate = append(m.Aggregate, agg)
 	}
@@ -194,15 +198,33 @@ func scanAggregates(dir string, m *ProjectModel) error {
 
 // aggregateDeclRegex matches generated aggregate constants such as
 // `const OrderAggregateName = "order"`.
-var aggregateDeclRegex = regexp.MustCompile(`(?m)^\s*const\s+([A-Z][A-Za-z0-9]*)AggregateName\s*=`)
+var aggregateDeclRegex = regexp.MustCompile(`(?m)^\s*const\s+([A-Z][A-Za-z0-9]*)AggregateName\s*=\s*"([a-z][a-z0-9_-]*)"`)
 
-func declaresAggregate(path, name string) bool {
+func declaredAggregateName(path, fileName string) (string, bool) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return "", false
 	}
 	match := aggregateDeclRegex.FindSubmatch(src)
-	return match != nil && string(match[1]) == naming.ToPascalCase(name)
+	if match == nil || string(match[1]) != naming.ToPascalCase(fileName) {
+		return "", false
+	}
+	return string(match[2]), true
+}
+
+func aggregateNamesByFile(aggregates []Aggregate) map[string]string {
+	names := make(map[string]string, len(aggregates))
+	for _, aggregate := range aggregates {
+		names[aggregate.FileName] = aggregate.Name
+	}
+	return names
+}
+
+func aggregateStoreName(names map[string]string, fileName string) string {
+	if name := names[fileName]; name != "" {
+		return name
+	}
+	return fileName
 }
 
 // structEventRegex matches top-level type declarations of the form
@@ -272,7 +294,7 @@ var handlerServiceRegex = regexp.MustCompile(`svc\s+\*service\.([A-Z][A-Za-z0-9]
 
 // scanHandlers walks server/handler/ and resolves the aggregate each
 // handler belongs to via the service field of its struct.
-func scanHandlers(dir string, m *ProjectModel) error {
+func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -294,7 +316,7 @@ func scanHandlers(dir string, m *ProjectModel) error {
 		}
 		agg := ""
 		if mm := handlerServiceRegex.FindStringSubmatch(string(src)); mm != nil {
-			agg = naming.ToSnakeCase(mm[1])
+			agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(mm[1]))
 		}
 		m.Handler = append(m.Handler, Handler{
 			Name:      handlerName,
@@ -323,7 +345,7 @@ var aggregateLiteralRegex = regexp.MustCompile(`"([a-z][a-z0-9_-]*)"`)
 
 // scanProjections inspects each *_worker.go file in projection/ to decide
 // whether it is multi-aggregate or single, and which aggregates it lists.
-func scanProjections(dir string, m *ProjectModel) error {
+func scanProjections(dir string, aggregateNames map[string]string, m *ProjectModel) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -377,9 +399,10 @@ func scanProjections(dir string, m *ProjectModel) error {
 		}
 		p.Multi = isMulti
 
-		// Single-aggregate projection listens to the worker name itself.
+		// Single-aggregate projection listens to the aggregate-store name
+		// declared in domain/<name>.go (which may be kebab-case).
 		if !isMulti {
-			p.Aggregates = []string{workerName}
+			p.Aggregates = []string{aggregateStoreName(aggregateNames, workerName)}
 		}
 		sort.Strings(p.Aggregates)
 
@@ -400,7 +423,7 @@ var rowReturnRegex = regexp.MustCompile(`\((?:\*|\[\])(\w+)Row\b`)
 
 // scanQueries lists query functions in projection/query.go and derives
 // the aggregate they serve from the row type they return.
-func scanQueries(path string, m *ProjectModel) error {
+func scanQueries(path string, aggregateNames map[string]string, m *ProjectModel) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -413,7 +436,7 @@ func scanQueries(path string, m *ProjectModel) error {
 		if mm := queryFuncRegex.FindStringSubmatch(strings.TrimSpace(line)); mm != nil {
 			agg := ""
 			if rr := rowReturnRegex.FindStringSubmatch(line); rr != nil {
-				agg = naming.ToSnakeCase(rr[1])
+				agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(rr[1]))
 			}
 			m.Query = append(m.Query, Query{Name: mm[1], Aggregate: agg})
 		}
@@ -422,7 +445,7 @@ func scanQueries(path string, m *ProjectModel) error {
 }
 
 // fieldDeclRegex matches a line like `OrderProjectionWorker *projection.OrderProjectionWorker`
-var fieldDeclRegex = regexp.MustCompile(`^\s*([A-Z][A-Za-z0-9]+)\s+\*?([\w\.]+)\s*$`)
+var fieldDeclRegex = regexp.MustCompile(`^\s*([A-Z][A-Za-z0-9]+)\s+(\*?[\w\.]+)\s*$`)
 
 // initLineRegex matches `varName := constructor(...)` lines inside NewApp.
 var initLineRegex = regexp.MustCompile(`^\s*([a-z][A-Za-z0-9]*)\s*:=\s*([\w\.]+)New([A-Z][A-Za-z0-9]+)\(`)

@@ -5,6 +5,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/ariefsam/esb/naming"
 )
 
 // Print writes a single-screen summary of m to w. When focus is non-empty,
@@ -12,8 +14,12 @@ import (
 // in detail; the rest appears as a compact header line so the reader does
 // not lose context.
 func Print(w io.Writer, m ProjectModel, focus string) error {
-	if focus != "" && !hasAggregate(m.Aggregate, focus) {
-		return fmt.Errorf("aggregate %q tidak ditemukan", focus)
+	if focus != "" {
+		resolved, ok := resolveAggregateFocus(m.Aggregate, focus)
+		if !ok {
+			return fmt.Errorf("aggregate %q tidak ditemukan", focus)
+		}
+		focus = resolved
 	}
 
 	var buf strings.Builder
@@ -276,7 +282,12 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 
 func isFocusedServiceNode(node WireNode, focus string) bool {
 	service := strings.TrimSuffix(node.VarName, "Svc")
-	return service != node.VarName && camelToSnake(service) == focus
+	return service != node.VarName && aggregateNameMatches(service, focus)
+}
+
+func aggregateNameMatches(identifier, aggregateName string) bool {
+	normalized := strings.ReplaceAll(aggregateName, "-", "_")
+	return naming.ToSnakeCase(identifier) == normalized
 }
 
 // focusedChains returns the PascalCase field names in the wire graph that
@@ -305,7 +316,7 @@ func focusedChains(m ProjectModel, focus string) []string {
 		}
 		if strings.HasSuffix(f.Field, "Handler") {
 			base := strings.TrimSuffix(f.Field, "Handler")
-			if handlers[camelToSnake(base)] {
+			if handlers[naming.ToSnakeCase(base)] {
 				out = append(out, f.Field)
 				seen[f.Field] = true
 				continue
@@ -313,7 +324,7 @@ func focusedChains(m ProjectModel, focus string) []string {
 		}
 		if strings.HasSuffix(f.Field, "ProjectionWorker") {
 			base := strings.TrimSuffix(f.Field, "ProjectionWorker")
-			if workers[camelToSnake(base)] {
+			if workers[naming.ToSnakeCase(base)] {
 				out = append(out, f.Field)
 				seen[f.Field] = true
 			}
@@ -322,26 +333,8 @@ func focusedChains(m ProjectModel, focus string) []string {
 	return out
 }
 
-// camelToSnake converts a CamelCase identifier to snake_case (best-effort
-// for matching wire field names like "PlaceOrderHandler" against
-// "place_order").
-func camelToSnake(s string) string {
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
-		}
-		if r >= 'A' && r <= 'Z' {
-			b.WriteRune(r + 'a' - 'A')
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 // aggregateTouches reports whether the given aggregate list contains
-// target. target is the snake_case form the user typed on the command line.
+// target. target is the aggregate-store name resolved from the user's input.
 func aggregateTouches(list []string, target string) bool {
 	for _, a := range list {
 		if a == target {
@@ -351,13 +344,13 @@ func aggregateTouches(list []string, target string) bool {
 	return false
 }
 
-func hasAggregate(aggregates []Aggregate, target string) bool {
+func resolveAggregateFocus(aggregates []Aggregate, target string) (string, bool) {
 	for _, aggregate := range aggregates {
-		if aggregate.Name == target {
-			return true
+		if aggregate.Name == target || aggregate.FileName == target {
+			return aggregate.Name, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func fallback(s, alt string) string {

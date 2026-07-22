@@ -168,7 +168,7 @@ func TestPrint_Focus(t *testing.T) {
 }
 
 func TestPrint_UnknownFocusReturnsError(t *testing.T) {
-	m := ProjectModel{Aggregate: []Aggregate{{Name: "order"}}}
+	m := ProjectModel{Aggregate: []Aggregate{{Name: "order", FileName: "order"}}}
 
 	var buf bytes.Buffer
 	err := Print(&buf, m, "missing")
@@ -180,6 +180,74 @@ func TestPrint_UnknownFocusReturnsError(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Fatalf("Print wrote partial output before returning the error: %q", buf.String())
+	}
+}
+
+func TestPrint_FocusAcceptsGeneratedSnakeCaseFileName(t *testing.T) {
+	m := ProjectModel{
+		Aggregate:  []Aggregate{{Name: "bank-account", FileName: "bank_account"}},
+		Projection: []Projection{{Name: "bank_account", Aggregates: []string{"bank-account"}}},
+		Handler:    []Handler{{Name: "open_bank_account", Aggregate: "bank-account"}},
+		Query:      []Query{{Name: "BankAccounts", Aggregate: "bank-account"}},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "BankAccountProjectionWorker", Type: "*projection.BankAccountProjectionWorker"},
+				{Field: "OpenBankAccountHandler", Type: "*handler.OpenBankAccountHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "bankAccountWorker", Provider: "projection.NewBankAccountProjectionWorker(...)"},
+				{VarName: "bankAccountSvc", Provider: "service.NewBankAccountService(...)"},
+				{VarName: "openBankAccountHandler", Provider: "handler.NewOpenBankAccountHandler(...)"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "bank_account"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"focus:   bank-account",
+		"Projections — menyentuh bank-account",
+		"Handlers — bank-account",
+		"Queries — bank-account",
+		"BankAccountProjectionWorker",
+		"OpenBankAccountHandler",
+		"service.NewBankAccountService",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("focused output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPrint_FocusMatchesGeneratedInitialismsInWireFields(t *testing.T) {
+	m := ProjectModel{
+		Aggregate:  []Aggregate{{Name: "api-usage", FileName: "api_usage"}},
+		Projection: []Projection{{Name: "api_usage", Aggregates: []string{"api-usage"}}},
+		Handler:    []Handler{{Name: "use_api", Aggregate: "api-usage"}},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "APIUsageProjectionWorker", Type: "*projection.APIUsageProjectionWorker"},
+				{Field: "UseAPIHandler", Type: "*handler.UseAPIHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "apiUsageWorker", Provider: "projection.NewAPIUsageProjectionWorker(...)"},
+				{VarName: "useAPIHandler", Provider: "handler.NewUseAPIHandler(...)"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "api_usage"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{"APIUsageProjectionWorker", "UseAPIHandler"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("focused output missing initialism field %q:\n%s", want, got)
+		}
 	}
 }
 

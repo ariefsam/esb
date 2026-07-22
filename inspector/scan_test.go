@@ -98,6 +98,11 @@ func TestScan_Fixture(t *testing.T) {
 	if len(got.Wire.Fields) != 2 {
 		t.Errorf("len(Wire.Fields) = %d, want 2", len(got.Wire.Fields))
 	}
+	for _, field := range got.Wire.Fields {
+		if !strings.HasPrefix(field.Type, "*") {
+			t.Errorf("Wire field %s type = %q, want generated pointer type", field.Field, field.Type)
+		}
+	}
 	if len(got.Wire.Nodes) != 2 {
 		t.Errorf("len(Wire.Nodes) = %d, want 2", len(got.Wire.Nodes))
 	}
@@ -200,6 +205,59 @@ type Money struct { Currency string }
 	}
 	if len(got.Aggregate) != 1 || got.Aggregate[0].Name != "order" {
 		t.Fatalf("Aggregate = %+v, want only order", got.Aggregate)
+	}
+}
+
+func TestScan_UsesDeclaredAggregateNameForKebabCaseAggregates(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	mkDir(t, dir, "domain")
+	if err := os.WriteFile(filepath.Join(dir, "domain", "bank_account.go"), []byte(`package domain
+const BankAccountAggregateName = "bank-account"
+type BankAccount struct{}
+type BankAccountOpened struct{}
+`), 0644); err != nil {
+		t.Fatalf("write domain/bank_account.go: %v", err)
+	}
+	mkDir(t, dir, "projection")
+	if err := os.WriteFile(filepath.Join(dir, "projection", "bank_account_worker.go"), []byte("package projection\n"), 0644); err != nil {
+		t.Fatalf("write projection/bank_account_worker.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "projection", "query.go"), []byte(`package projection
+func BankAccounts(ctx context.Context, db *gorm.DB) ([]BankAccountRow, error) { return nil, nil }
+`), 0644); err != nil {
+		t.Fatalf("write projection/query.go: %v", err)
+	}
+	mkDir(t, dir, "server", "handler")
+	if err := os.WriteFile(filepath.Join(dir, "server", "handler", "open_bank_account.go"), []byte(`package handler
+type OpenBankAccountHandler struct { svc *service.BankAccountService }
+`), 0644); err != nil {
+		t.Fatalf("write server/handler/open_bank_account.go: %v", err)
+	}
+
+	got, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(got.Aggregate) != 1 {
+		t.Fatalf("Aggregate = %+v, want one bank-account aggregate", got.Aggregate)
+	}
+	if got.Aggregate[0].Name != "bank-account" {
+		t.Fatalf("Aggregate[0].Name = %q, want bank-account from the generated declaration", got.Aggregate[0].Name)
+	}
+	if !equalStrings(got.Aggregate[0].Events, []string{"BankAccountOpened"}) {
+		t.Fatalf("Aggregate[0].Events = %v, want BankAccountOpened", got.Aggregate[0].Events)
+	}
+	if len(got.Projection) != 1 || !equalStrings(got.Projection[0].Aggregates, []string{"bank-account"}) {
+		t.Fatalf("Projection = %+v, want the bank-account store name", got.Projection)
+	}
+	if len(got.Handler) != 1 || got.Handler[0].Aggregate != "bank-account" {
+		t.Fatalf("Handler = %+v, want the bank-account store name", got.Handler)
+	}
+	if len(got.Query) != 1 || got.Query[0].Aggregate != "bank-account" {
+		t.Fatalf("Query = %+v, want the bank-account store name", got.Query)
 	}
 }
 
