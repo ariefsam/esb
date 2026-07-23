@@ -1,0 +1,323 @@
+package inspector
+
+import (
+	"bytes"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// TestPrint_EmptyProject — a freshly initialised project with no adds
+// must render the header plus empty placeholders, never crash.
+func TestPrint_EmptyProject(t *testing.T) {
+	m := ProjectModel{
+		ModuleName:  "github.com/example/empty",
+		PackageName: "empty",
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, ""); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"esb show",
+		"github.com/example/empty",
+		"Aggregates",
+		"(tidak ada",
+		"Wire Graph",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in output:\n%s", want, got)
+		}
+	}
+}
+
+// TestPrint_FullProject — every section should render at least one real
+// line when the project has aggregates, handlers, projections, queries,
+// storage, and a wire graph.
+func TestPrint_FullProject(t *testing.T) {
+	m := ProjectModel{
+		ModuleName:  "github.com/example/full",
+		PackageName: "full",
+		Aggregate: []Aggregate{
+			{Name: "order", Events: []string{"OrderPlaced", "OrderCancelled"}},
+			{Name: "user", Events: []string{"UserRegistered"}},
+		},
+		Projection: []Projection{
+			{Name: "order", Multi: false, Aggregates: []string{"order"}},
+			{Name: "balance", Multi: true, Aggregates: []string{"order", "user"}},
+		},
+		Handler: []Handler{
+			{Name: "place_order", Aggregate: "order"},
+			{Name: "cancel_order", Aggregate: "order"},
+		},
+		Query: []Query{
+			{Name: "GetOrderByBuyer", Aggregate: "order"},
+		},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "BalanceProjectionWorker", Type: "*projection.BalanceProjectionWorker"},
+				{Field: "OrderProjectionWorker", Type: "*projection.OrderProjectionWorker"},
+				{Field: "PlaceOrderHandler", Type: "*handler.PlaceOrderHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "balanceWorker", Provider: "projection.NewBalanceProjectionWorker(...)"},
+				{VarName: "orderWorker", Provider: "projection.NewOrderProjectionWorker(...)"},
+				{VarName: "placeOrderHandler", Provider: "handler.NewPlaceOrderHandler(...)"},
+			},
+		},
+		Migrate:   []string{"OrderRow", "BalanceRow"},
+		RunWorker: []string{"OrderProjectionWorker"},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, ""); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"order",
+		"user",
+		"OrderPlaced",
+		"balance",
+		"[multi]",
+		"place_order",
+		"GetOrderByBuyer",
+		"+-- OrderProjectionWorker",
+		"projection.NewOrderProjectionWorker",
+		"AutoMigrate: OrderRow",
+		"Event store: EventRepository -> repository.EventStoreAdapter -> eventstore.Client",
+		"declared but not started: BalanceProjectionWorker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in output:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "declared but not started: PlaceOrderHandler") {
+		t.Errorf("handlers are request-driven and must not be reported as unstarted workers:\n%s", got)
+	}
+}
+
+// TestPrint_Focus — when focused on "order", the focused aggregate is
+// marked with ">>" and the wire graph only shows the Order* chain.
+func TestPrint_Focus(t *testing.T) {
+	m := ProjectModel{
+		ModuleName:  "github.com/example/full",
+		PackageName: "full",
+		Aggregate: []Aggregate{
+			{Name: "order", Events: []string{"OrderPlaced"}},
+			{Name: "user", Events: []string{"UserRegistered"}},
+		},
+		Projection: []Projection{
+			{Name: "order", Multi: false, Aggregates: []string{"order"}},
+			{Name: "balance", Multi: true, Aggregates: []string{"order", "user"}},
+			{Name: "user", Multi: false, Aggregates: []string{"user"}},
+		},
+		Handler: []Handler{
+			{Name: "place_order", Aggregate: "order"},
+			{Name: "register_user", Aggregate: "user"},
+		},
+		Query: []Query{
+			{Name: "GetOrderByBuyer", Aggregate: "order"},
+			{Name: "GetUserByEmail", Aggregate: "user"},
+		},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "OrderProjectionWorker", Type: "*projection.OrderProjectionWorker"},
+				{Field: "PlaceOrderHandler", Type: "*handler.PlaceOrderHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "orderSvc", Provider: "service.NewOrderService(...)"},
+				{VarName: "orderWorker", Provider: "projection.NewOrderProjectionWorker(...)"},
+				{VarName: "placeOrderHandler", Provider: "handler.NewPlaceOrderHandler(...)"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "order"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+
+	// Focus marker visible on the order aggregate and names the focus.
+	if !strings.Contains(got, ">> order") {
+		t.Errorf("missing '>> order' focus marker:\n%s", got)
+	}
+	if !strings.Contains(got, "focus:   order") {
+		t.Errorf("missing focused aggregate name in header:\n%s", got)
+	}
+	// user aggregate still appears in the list (compact header).
+	if !strings.Contains(got, "   user") {
+		t.Errorf("expected 'user' aggregate in compact header:\n%s", got)
+	}
+	// OrderProjectionWorker is shown, PlaceOrderHandler is shown (handlers order*), but no PlaceOrderHandler fallback chain because we don't have all deps.
+	if !strings.Contains(got, "OrderProjectionWorker") {
+		t.Errorf("expected OrderProjectionWorker in focused wire graph:\n%s", got)
+	}
+	if !strings.Contains(got, "PlaceOrderHandler") {
+		t.Errorf("expected PlaceOrderHandler in focused wire graph:\n%s", got)
+	}
+	if !strings.Contains(got, "service.NewOrderService") {
+		t.Errorf("expected the handler's aggregate service in focused wire graph:\n%s", got)
+	}
+	// Unrelated focused sections and wire nodes should not appear.
+	for _, unrelated := range []string{"Projections — lainnya", "Handlers — lainnya", "Queries — lainnya", "register_user", "GetUserByEmail"} {
+		if strings.Contains(got, unrelated) {
+			t.Errorf("focused view should not show unrelated content %q:\n%s", unrelated, got)
+		}
+	}
+	if strings.Contains(got, "BalanceProjectionWorker") {
+		t.Errorf("focused view should not show BalanceProjectionWorker:\n%s", got)
+	}
+}
+
+func TestPrint_UnknownFocusReturnsError(t *testing.T) {
+	m := ProjectModel{Aggregate: []Aggregate{{Name: "order", FileName: "order"}}}
+
+	var buf bytes.Buffer
+	err := Print(&buf, m, "missing")
+	if err == nil {
+		t.Fatal("Print returned nil for an unknown aggregate focus")
+	}
+	if !strings.Contains(err.Error(), `aggregate "missing" tidak ditemukan`) {
+		t.Fatalf("Print error = %q, want unknown aggregate message", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("Print wrote partial output before returning the error: %q", buf.String())
+	}
+}
+
+func TestPrint_FocusAcceptsGeneratedSnakeCaseFileName(t *testing.T) {
+	m := ProjectModel{
+		Aggregate:  []Aggregate{{Name: "bank-account", FileName: "bank_account"}},
+		Projection: []Projection{{Name: "bank_account", Aggregates: []string{"bank-account"}}},
+		Handler:    []Handler{{Name: "open_bank_account", Aggregate: "bank-account"}},
+		Query:      []Query{{Name: "BankAccounts", Aggregate: "bank-account"}},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "BankAccountProjectionWorker", Type: "*projection.BankAccountProjectionWorker"},
+				{Field: "OpenBankAccountHandler", Type: "*handler.OpenBankAccountHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "bankAccountWorker", Provider: "projection.NewBankAccountProjectionWorker(...)"},
+				{VarName: "bankAccountSvc", Provider: "service.NewBankAccountService(...)"},
+				{VarName: "openBankAccountHandler", Provider: "handler.NewOpenBankAccountHandler(...)"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "bank_account"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"focus:   bank-account",
+		"Projections — menyentuh bank-account",
+		"Handlers — bank-account",
+		"Queries — bank-account",
+		"BankAccountProjectionWorker",
+		"OpenBankAccountHandler",
+		"service.NewBankAccountService",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("focused output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPrint_FocusMatchesGeneratedInitialismsInWireFields(t *testing.T) {
+	m := ProjectModel{
+		Aggregate:  []Aggregate{{Name: "api-usage", FileName: "api_usage"}},
+		Projection: []Projection{{Name: "api_usage", Aggregates: []string{"api-usage"}}},
+		Handler:    []Handler{{Name: "use_api", Aggregate: "api-usage"}},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "APIUsageProjectionWorker", Type: "*projection.APIUsageProjectionWorker"},
+				{Field: "UseAPIHandler", Type: "*handler.UseAPIHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "apiUsageWorker", Provider: "projection.NewAPIUsageProjectionWorker(...)"},
+				{VarName: "useAPIHandler", Provider: "handler.NewUseAPIHandler(...)"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "api_usage"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{"APIUsageProjectionWorker", "UseAPIHandler"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("focused output missing initialism field %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPrint_LineCount — single-screen promise: a mid-size project should
+// fit in a conventional 24-line terminal.
+func TestPrint_LineCount(t *testing.T) {
+	m := ProjectModel{
+		ModuleName:  "github.com/example/mid",
+		PackageName: "mid",
+		Aggregate: []Aggregate{
+			{Name: "order", Events: []string{"OrderPlaced", "OrderCancelled"}},
+			{Name: "user", Events: []string{"UserRegistered"}},
+			{Name: "product", Events: []string{"ProductListed"}},
+		},
+		Projection: []Projection{
+			{Name: "order", Multi: false, Aggregates: []string{"order"}},
+			{Name: "balance", Multi: true, Aggregates: []string{"order", "user"}},
+		},
+		Handler: []Handler{
+			{Name: "place_order", Aggregate: "order"},
+			{Name: "list_products", Aggregate: "product"},
+		},
+		Wire: WireGraph{
+			Fields: []WireNode{
+				{Field: "OrderProjectionWorker", Type: "*projection.OrderProjectionWorker"},
+				{Field: "BalanceProjectionWorker", Type: "*projection.BalanceProjectionWorker"},
+				{Field: "PlaceOrderHandler", Type: "*handler.PlaceOrderHandler"},
+				{Field: "ListProductsHandler", Type: "*handler.ListProductsHandler"},
+			},
+			Nodes: []WireNode{
+				{VarName: "orderWorker", Provider: "projection.NewOrderProjectionWorker(...)"},
+				{VarName: "balanceWorker", Provider: "projection.NewBalanceProjectionWorker(...)"},
+				{VarName: "placeOrderHandler", Provider: "handler.NewPlaceOrderHandler(...)"},
+				{VarName: "listProductsHandler", Provider: "handler.NewListProductsHandler(...)"},
+			},
+		},
+		Migrate:   []string{"OrderRow", "UserRow", "ProductRow", "BalanceRow"},
+		RunWorker: []string{"OrderProjectionWorker", "BalanceProjectionWorker"},
+	}
+
+	var buf bytes.Buffer
+	if err := Print(&buf, m, "order"); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	lines := strings.Count(buf.String(), "\n")
+	if lines > 24 {
+		t.Errorf("focused mid-size project printed %d lines, want <= 24:\n%s", lines, buf.String())
+	}
+}
+
+func TestPrint_PropagatesWriterErrors(t *testing.T) {
+	err := Print(failingWriter{}, ProjectModel{ModuleName: "example.com/demo"}, "")
+	if err == nil {
+		t.Fatal("Print returned nil for a failing writer")
+	}
+	if !strings.Contains(err.Error(), "write summary") {
+		t.Fatalf("Print error = %q, want write summary context", err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}

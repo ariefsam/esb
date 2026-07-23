@@ -259,6 +259,58 @@ func GetOrderByBuyer(ctx context.Context, db *gorm.DB, buyerID string) ([]OrderR
 
 ---
 
+### `esb show [aggregate-name]`
+
+Cetak ringkasan satu-layar dari proyek saat ini: aggregate + event, handler wiring, projection worker (single/multi), storage & run-workers, dan wire provider graph. Tidak menulis apa-apa — murni baca file hasil generator.
+
+```bash
+esb show
+esb show order
+```
+
+Tanpa argumen: tampilkan semua section. Dengan nama aggregate: fokus hanya ke bagian yang menyentuh aggregate tersebut (events, handlers, query, projection worker, sub-graph wire), sisa proyek tetap ditampilkan ringkas di header.
+
+Contoh output untuk proyek e-commerce kecil:
+
+```
+esb show — domain at a glance
+==============================================================================
+module:  github.com/myorg/toko
+package: toko
+
+Aggregates
+------------------------------------------------------------------------------
+   order     (3 events: OrderPlaced, OrderCancelled, OrderShipped)
+   product   (2 events: ProductListed, StockAdjusted)
+   user      (1 events: UserRegistered)
+
+Projections — semua
+------------------------------------------------------------------------------
+  order        [single]  listens: order
+  sales_report [multi]   listens: order, product
+
+Handlers — semua
+------------------------------------------------------------------------------
+  cancel_order  ->  aggregate: order
+  place_order   ->  aggregate: order
+  list_products ->  aggregate: product
+
+Storage
+------------------------------------------------------------------------------
+  AutoMigrate: OrderRow, ProductRow, UserRow, SalesReportRow
+  Run workers: OrderProjectionWorker, SalesReportProjectionWorker
+
+Wire Graph
+------------------------------------------------------------------------------
+  App
+  +-- OrderProjectionWorker  *projection.OrderProjectionWorker
+  |     projection.NewOrderProjectionWorker(...)
+  +-- PlaceOrderHandler  *handler.PlaceOrderHandler
+  |     handler.NewPlaceOrderHandler(...)
+```
+
+---
+
 ## Cara Kerja (Pattern yang Dihasilkan)
 
 Setiap proyek mengikuti arsitektur ini:
