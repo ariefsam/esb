@@ -311,6 +311,81 @@ Wire Graph
 
 ---
 
+### `esb ui`
+
+Jalankan web UI lokal untuk proyek ESB saat ini. UI membaca file hasil
+generator dengan `inspector.Scan`, menampilkan dashboard, dan
+menjalankan command esb yang termasuk allowlist — tanpa menyentuh
+event store, scheduler, atau service eksternal apapun.
+
+```bash
+esb ui                          # default: http://127.0.0.1:8787
+esb ui --addr 127.0.0.1:9001    # bind ke host/port lain
+```
+
+Setelah jalan, buka URL yang dicetak di terminal.
+
+#### Routes
+
+| Method | Route | Deskripsi |
+|---|---|---|
+| `GET`  | `/healthz` | smoke endpoint, selalu 200 kalau proses hidup |
+| `GET`  | `/` | dashboard: module, aggregates, events, projections, handlers, queries, storage |
+| `GET`  | `/aggregates/{name}` | detail satu aggregate: events, handlers, query, projection worker |
+| `GET`  | `/commands` | katalog command + form untuk menjalankan command |
+| `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
+| `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |
+| `GET`  | `/static/*` | CSS dan helper JS (embedded di binary, offline) |
+
+`POST /commands/execute` mengembalikan `405` untuk method lain,
+`400` untuk command/field tidak valid, dan `409` ketika command lain
+sedang berjalan.
+
+#### Command yang didukung
+
+UI hanya menjalankan command dari allowlist tertutup — tidak ada
+exec arbitrary, tidak ada shell interpolation. Setiap form input
+divalidasi sebelum diterjemahkan ke argv.
+
+| Command ID | argv yang dijalankan |
+|---|---|
+| `add-aggregate` | `esb add aggregate <name>` |
+| `add-event` | `esb add event <aggregate> <EventName> [field:type ...]` |
+| `add-projection` | `esb add projection <name> --aggregates <a,b,...>` |
+| `add-handler` | `esb add handler <name> --aggregate <aggregate>` |
+| `add-query` | `esb add query <name> --aggregate <aggregate>` |
+| `show` | `esb show [aggregate]` |
+
+Karakter non-`[A-Za-z0-9_-]` (dan `:,.,` pada field event) ditolak
+oleh validator — sehingga input seperti `order;touch /tmp/pwned`
+tidak pernah menjadi argv dan tidak pernah masuk shell.
+
+#### Keamanan dan limit
+
+- **Hanya localhost.** Default bind ke `127.0.0.1:8787`. `--addr
+  0.0.0.0:...` hanya untuk override eksplisit; jangan dipakai di
+  jaringan bersama.
+- **Tanpa shell.** Runner menggunakan `exec.CommandContext` dengan
+  argv slice, bukan `sh -c`.
+- **Satu command aktif.** UI menolak eksekusi kedua selama satu
+  command masih berjalan, sehingga generator tidak pernah tulis
+  paralel ke file yang sama.
+- **Bounded run.** Timeout 5 menit per command. Output per stream
+  dipotong di 1 MiB dengan marker truncation.
+- **Run history in-memory.** Run hilang ketika server berhenti —
+  tidak ada persistence ke event store atau database.
+- **No CDN.** CSS dan JS di-embed ke binary lewat `//go:embed`. Tidak
+  ada request keluar dari browser.
+- **CSRF-equivalent.** Origin check pada POST: form submission hanya
+  dari same-origin; tidak ada GET dengan efek samping, tidak ada
+  arbitrary command/file upload.
+
+Setelah command berhasil, buka overview dan jalankan `esb show` /
+refresh browser untuk melihat file yang baru dibuat. UI tidak auto-refresh
+— parser adalah snapshot point-in-time.
+
+---
+
 ## Cara Kerja (Pattern yang Dihasilkan)
 
 Setiap proyek mengikuti arsitektur ini:

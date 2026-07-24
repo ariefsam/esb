@@ -1,0 +1,48 @@
+{{define "commands"}}
+<section class="hero">
+  <h1>Commands</h1>
+  <p class="muted">Pilih salah satu perintah esb yang diizinkan, isi argument, lalu jalankan.</p>
+</section>
+
+{{if .Error}}
+<div class="flash error">{{.Error}}</div>
+{{end}}
+{{if .Flash}}
+<div class="flash">{{.Flash}}</div>
+{{end}}
+
+{{range .Commands}}
+<section class="cmd">
+  <h2>{{.Label}}</h2>
+  <p class="muted">{{.Description}}</p>
+  <form method="POST" action="/commands/execute" data-cmd="{{.ID}}">
+    <input type="hidden" name="command" value="{{.ID}}">
+    <div class="grid">
+      {{range .Fields}}
+      <label>
+        <span>{{.Label}}{{if .Required}} *{{end}}</span>
+        {{if eq .Type "list"}}
+        <textarea data-field-name="{{.Name}}" data-field-type="list"
+                  name="{{.Name}}" rows="4" placeholder="{{.Placeholder}}"
+                  {{if .Required}}required{{end}}></textarea>
+        {{else}}
+        <input type="text" data-field-name="{{.Name}}" data-field-type="text"
+               name="{{.Name}}" placeholder="{{.Placeholder}}"
+               {{if .Required}}required{{end}}>
+        {{end}}
+        {{if .Help}}<small class="muted">{{.Help}}</small>{{end}}
+      </label>
+      {{end}}
+    </div>
+    <div class="preview">
+      <strong>preview:</strong>
+      <code data-preview></code>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Run command</button>
+      <small class="muted">project root: <code>{{$.Project.ModuleName}}</code></small>
+    </div>
+  </form>
+</section>
+{{end}}
+{{end}}

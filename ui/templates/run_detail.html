@@ -1,0 +1,43 @@
+{{define "run_detail"}}
+<section class="hero">
+  <h1>Run <code>{{.Run.ID}}</code></h1>
+  <p class="muted"><a href="/commands">&larr; back to commands</a></p>
+</section>
+
+<section data-run-status="{{.Run.Status}}" data-run-running="{{.Running}}">
+  <h2>Status: <span class="badge {{.Run.Status}}">{{.Run.Status}}</span></h2>
+  <dl class="kv">
+    <dt>command</dt><dd><code>{{.Run.CommandID}}</code></dd>
+    <dt>argv</dt><dd><code>{{range .Run.Argv}}{{.}} {{end}}</code></dd>
+    <dt>working dir</dt><dd><code>{{.Run.Dir}}</code></dd>
+    <dt>started</dt><dd>{{.Run.StartedAt.Format "2006-01-02 15:04:05"}}</dd>
+    {{if not .Run.FinishedAt.IsZero}}
+    <dt>finished</dt><dd>{{.Run.FinishedAt.Format "2006-01-02 15:04:05"}}</dd>
+    {{end}}
+    {{if ne .Run.Status "running"}}
+    <dt>exit code</dt><dd><code>{{.Run.ExitCode}}</code></dd>
+    {{end}}
+  </dl>
+</section>
+
+{{if .Run.Err}}
+<section>
+  <h2>Error</h2>
+  <pre class="terminal err">{{.Run.Err}}</pre>
+</section>
+{{end}}
+
+<section>
+  <h2>stdout</h2>
+  <pre class="terminal" data-toggle="stdout">{{if .Run.Stdout}}{{.Run.Stdout}}{{else}}(kosong){{end}}</pre>
+
+  <h2>stderr</h2>
+  <pre class="terminal err" data-toggle="stderr">{{if .Run.Stderr}}{{.Run.Stderr}}{{else}}(kosong){{end}}</pre>
+</section>
+
+{{if eq .Run.Status "succeeded"}}
+<section class="flash success">
+  Command selesai. Klik <a href="/">overview</a> lalu refresh project untuk melihat file yang baru dibuat.
+</section>
+{{end}}
+{{end}}

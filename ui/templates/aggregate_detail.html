@@ -1,0 +1,59 @@
+{{define "aggregate_detail"}}
+<section class="hero">
+  <h1>Aggregate <code>{{.Name}}</code></h1>
+  <p class="muted"><a href="/">&larr; back to overview</a></p>
+</section>
+
+<section>
+  <h2>Events</h2>
+  {{if .Events}}
+  <ul class="chips">
+    {{range .Events}}<li>{{.}}</li>{{end}}
+  </ul>
+  {{else}}
+  <p class="muted">(0 events)</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Handlers</h2>
+  {{if .Handlers}}
+  <ul class="kv-list">
+    {{range .Handlers}}<li><code>{{.Name}}</code> &rarr; aggregate: <code>{{.Aggregate}}</code></li>{{end}}
+  </ul>
+  {{else}}
+  <p class="muted">(tidak ada)</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Queries</h2>
+  {{if .Queries}}
+  <ul class="kv-list">
+    {{range .Queries}}<li><code>{{.Name}}</code> &rarr; row: <code>{{.Aggregate}}</code></li>{{end}}
+  </ul>
+  {{else}}
+  <p class="muted">(tidak ada)</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Projection workers</h2>
+  {{if .Workers}}
+  <ul class="kv-list">
+    {{range .Workers}}<li><code>{{.Name}}</code> {{if .Multi}}[multi]{{else}}[single]{{end}} listens: {{range .Aggregates}}<code>{{.}}</code> {{end}}</li>{{end}}
+  </ul>
+  {{else}}
+  <p class="muted">(tidak ada)</p>
+  {{end}}
+</section>
+
+{{if .Other}}
+<section>
+  <h2>Other aggregates</h2>
+  <ul class="chips">
+    {{range .Other}}<li><a href="/aggregates/{{.}}">{{.}}</a></li>{{end}}
+  </ul>
+</section>
+{{end}}
+{{end}}

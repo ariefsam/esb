@@ -1,0 +1,36 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<title>{{.Title}} — esb ui</title>
+<link rel="stylesheet" href="{{.CSSPath}}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">esb <span>ui</span></div>
+  <nav>
+    {{range .Nav.Links}}
+    <a href="{{.Href}}" {{if eq .Key $.Nav.Active}}class="active"{{end}}>{{.Text}}</a>
+    {{end}}
+  </nav>
+  <div class="meta">project: <code>{{.Root}}</code></div>
+</header>
+
+{{if .Flash}}
+<div class="flash">{{.Flash}}</div>
+{{end}}
+
+<main>
+{{.Body | safeHTML}}
+</main>
+
+<footer>
+  <small>Local-only admin UI — bound to {{.Root}}. Refresh project setelah menjalankan command.</small>
+</footer>
+
+<script defer src="{{.JSPath}}"></script>
+</body>
+</html>
+{{end}}

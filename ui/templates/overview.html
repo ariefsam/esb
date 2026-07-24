@@ -1,0 +1,52 @@
+{{define "overview"}}
+<section class="hero">
+  <h1>{{.Title}}</h1>
+  <p class="muted">{{.Subtitle}}</p>
+</section>
+
+<section class="cards">
+  <div class="card"><div class="num">{{len .Project.Aggregate}}</div><div class="lab">aggregates</div></div>
+  <div class="card"><div class="num">{{.EventCount}}</div><div class="lab">events</div></div>
+  <div class="card"><div class="num">{{len .Project.Projection}}</div><div class="lab">projections</div></div>
+  <div class="card"><div class="num">{{.HandlerCount}}</div><div class="lab">handlers</div></div>
+  <div class="card"><div class="num">{{.QueryCount}}</div><div class="lab">queries</div></div>
+</section>
+
+<section>
+  <h2>Module</h2>
+  <dl class="kv">
+    <dt>module</dt><dd><code>{{.Project.ModuleName}}</code></dd>
+    <dt>package</dt><dd><code>{{.Project.PackageName}}</code></dd>
+  </dl>
+</section>
+
+<section>
+  <h2>Aggregates</h2>
+  {{if not .AggregateRows}}
+  <p class="muted">Belum ada aggregate — jalankan <a href="/commands?command=add-aggregate">Add aggregate</a>.</p>
+  {{else}}
+  <table>
+    <thead><tr><th>Name</th><th>Events</th><th></th></tr></thead>
+    <tbody>
+    {{range .AggregateRows}}
+      <tr>
+        <td><a href="{{.Href}}">{{.Name}}</a></td>
+        <td>{{.EventText}}</td>
+        <td class="actions"><a class="btn small" href="{{.Href}}">open</a></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Storage</h2>
+  <dl class="kv">
+    <dt>AutoMigrate</dt>
+    <dd>{{if .Project.Migrate}}{{range .Project.Migrate}}<code>{{.}}</code> {{end}}{{else}}<span class="muted">(tidak ada model terdaftar)</span>{{end}}</dd>
+    <dt>Run workers</dt>
+    <dd>{{if .Project.RunWorker}}{{range .Project.RunWorker}}<code>{{.}}</code> {{end}}{{else}}<span class="muted">(tidak ada — projection_workers marker kosong)</span>{{end}}</dd>
+  </dl>
+</section>
+{{end}}
