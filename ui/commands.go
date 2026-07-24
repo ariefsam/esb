@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ariefsam/esb/generator"
 	"github.com/ariefsam/esb/naming"
 )
 
@@ -559,8 +558,3 @@ func IsValidProjectRoot(path string) bool {
 	_, err := os.Stat(filepath.Join(path, "go.mod"))
 	return err == nil
 }
-
-// Compile-time check that the generator package is still importable.
-// We intentionally keep this dependency so future revisions can pull
-// in shared validation helpers without re-plumbing imports.
-var _ = generator.AddAggregate

@@ -331,7 +331,7 @@ Setelah jalan, buka URL yang dicetak di terminal.
 |---|---|---|
 | `GET`  | `/healthz` | smoke endpoint, selalu 200 kalau proses hidup |
 | `GET`  | `/` | dashboard: module, aggregates, events, projections, handlers, queries, storage |
-| `GET`  | `/aggregates/{name}` | detail satu aggregate: events, handlers, query, projection worker, wire chain |
+| `GET`  | `/aggregates/{name}` | detail satu aggregate: events, handlers, query, projection worker |
 | `GET`  | `/commands` | katalog command + form untuk menjalankan command |
 | `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
 | `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |

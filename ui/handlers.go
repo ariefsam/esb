@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ariefsam/esb/inspector"
@@ -63,9 +64,12 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	subtitle := fmt.Sprintf("%s — %d aggregates", model.ModuleName, len(model.Aggregate))
 	page := OverviewPage{
 		Kind:          PageOverview,
 		Project:       model,
+		Title:         "Project Overview",
+		Subtitle:      subtitle,
 		EventCount:    eventCount,
 		HandlerCount:  len(model.Handler),
 		QueryCount:    len(model.Query),
@@ -74,7 +78,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 
 	s.renderLayout(w, http.StatusOK, Layout{
 		Title:    "Project Overview",
-		Subtitle: fmt.Sprintf("%s — %d aggregates", model.ModuleName, len(model.Aggregate)),
+		Subtitle: subtitle,
 		Root:     s.projectRoot,
 		Body:     s.renderBody(page),
 		Nav:      defaultNav("overview"),
@@ -141,32 +145,6 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var chains []inspector.WireNode
-	for _, f := range model.Wire.Fields {
-		base := strings.TrimSuffix(f.Field, "Handler")
-		base = strings.TrimSuffix(base, "ProjectionWorker")
-		baseSnake := snakeFromPascal(base)
-		if baseSnake == "" {
-			continue
-		}
-		if strings.HasSuffix(f.Field, "Handler") {
-			for _, h := range matchingHandlers {
-				if h.Name == baseSnake {
-					chains = append(chains, f)
-					break
-				}
-			}
-		}
-		if strings.HasSuffix(f.Field, "ProjectionWorker") {
-			for _, p := range matchingWorkers {
-				if p.Name == baseSnake {
-					chains = append(chains, f)
-					break
-				}
-			}
-		}
-	}
-
 	var other []string
 	for _, a := range model.Aggregate {
 		if a.Name != resolved {
@@ -182,7 +160,6 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 		Handlers: matchingHandlers,
 		Queries:  matchingQueries,
 		Workers:  matchingWorkers,
-		Chains:   chains,
 		Other:    other,
 	}
 
@@ -193,24 +170,6 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 		Body:     s.renderBody(page),
 		Nav:      defaultNav("overview"),
 	})
-}
-
-// snakeFromPascal is a tiny inline converter used to map PascalCase
-// App field names ("OrderProjectionWorker") back to the snake_case
-// names the inspector uses ("order").
-func snakeFromPascal(s string) string {
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			b.WriteByte('_')
-		}
-		if r >= 'A' && r <= 'Z' {
-			b.WriteRune(r + 32)
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 // handleCommands serves the GET /commands form page.
@@ -252,6 +211,13 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.methodNotAllowed(w, r)
+		return
+	}
+	// Same-origin check: requests to a localhost tool shouldn't accept
+	// cross-site form posts. The browser sends `Origin` on every CORS
+	// request; if present, it must match the request's Host header.
+	if err := checkSameOrigin(r); err != nil {
+		s.badRequest(w, r, err.Error())
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -340,6 +306,31 @@ func catalogHasField(id, name string) bool {
 		}
 	}
 	return false
+}
+
+// checkSameOrigin enforces same-origin on POST /commands/execute. The
+// UI is localhost-only, but a cross-site form post from another
+// origin could still trigger a command — Origin / Referer matching
+// closes that gap. A missing Origin header on a POST is treated as a
+// non-browser client (curl, etc.) and is rejected so the rule is
+// consistent; legitimate browser requests always send Origin on POST.
+func checkSameOrigin(r *http.Request) error {
+	origin := r.Header.Get("Origin")
+	host := r.Host
+	if origin == "" {
+		return fmt.Errorf("origin header wajib ada untuk POST")
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("origin %q tidak valid: %w", origin, err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("origin %q tidak punya host", origin)
+	}
+	if !strings.EqualFold(u.Host, host) {
+		return fmt.Errorf("origin %q tidak sama dengan host %q", u.Host, host)
+	}
+	return nil
 }
 
 // handleRun serves /commands/runs/{id}.

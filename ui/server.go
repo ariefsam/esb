@@ -122,21 +122,6 @@ func logMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// contextKey is a private type to avoid collisions if other packages
-// place values on the same request context.
-type contextKey string
-
-const (
-	ctxProjectKey contextKey = "project"
-	ctxErrorKey   contextKey = "err"
-)
-
-// requestContext is the shared parent for every run. Cancelling it
-// (server shutdown) cancels in-flight child processes.
-func (s *Server) requestContext(r *http.Request) context.Context {
-	return r.Context()
-}
-
 // runContext is used as the parent for every background command run.
 // It is independent of the HTTP request that started the run so the
 // child process survives the request lifecycle — only server shutdown

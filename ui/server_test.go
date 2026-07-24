@@ -88,6 +88,17 @@ func TestServer_OverviewRenders(t *testing.T) {
 	if !strings.Contains(body, "/static/app.css") {
 		t.Errorf("body missing css link: %q", body)
 	}
+	// The overview body template renders .Title and .Subtitle from the
+	// page struct. If a future change drops those fields the template
+	// engine returns a render error which is silently inlined as
+	// "<!-- render error: ... -->". Asserting the hero subtitle ("N
+	// aggregates") makes sure the body executed cleanly.
+	if strings.Contains(body, "render error") {
+		t.Errorf("body template failed to render: %q", body)
+	}
+	if !strings.Contains(body, "aggregates") {
+		t.Errorf("body missing 'aggregates' subtitle: %q", body)
+	}
 }
 
 func TestServer_OverviewRejectsPost(t *testing.T) {
@@ -143,6 +154,9 @@ func TestServer_CommandsPage(t *testing.T) {
 			t.Errorf("body missing %q", want)
 		}
 	}
+	if strings.Contains(body, "render error") {
+		t.Errorf("body template failed to render: %q", body)
+	}
 }
 
 func TestServer_AggregateNotFound(t *testing.T) {
@@ -157,6 +171,55 @@ func TestServer_AggregateNotFound(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestServer_AggregatePageRenders builds a tiny aggregate inside the
+// test project root, hits /aggregates/<name>, and asserts the page
+// rendered without a swallowed template error. This guards against
+// future template regressions that silently substitute
+// `<!-- render error: ... -->` for a missing field.
+func TestServer_AggregatePageRenders(t *testing.T) {
+	dir := makeProjectRoot(t)
+	if err := os.MkdirAll(filepath.Join(dir, "domain"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	src := `package domain
+
+const OrderAggregateName = "order"
+
+// OrderPlaced event.
+type OrderPlaced struct {
+	Amount int64
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "domain", "order.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := NewServer(Options{ProjectRoot: dir})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/aggregates/order")
+	if err != nil {
+		t.Fatalf("GET /aggregates/order: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	if strings.Contains(body, "render error") {
+		t.Errorf("aggregate body template failed to render: %q", body)
+	}
+	for _, want := range []string{"Aggregate", "Events", "OrderPlaced"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
 	}
 }
 
@@ -200,7 +263,7 @@ func TestServer_ExecuteRejectsExtraField(t *testing.T) {
 	form := url.Values{}
 	form.Set("command", "show")
 	form.Set("rm", "-rf")
-	resp, err := http.PostForm(ts.URL+"/commands/execute", form)
+	resp, err := postFormWithOrigin(ts.URL+"/commands/execute", form, ts.URL)
 	if err != nil {
 		t.Fatalf("POST /commands/execute: %v", err)
 	}
@@ -222,13 +285,57 @@ func TestServer_ExecuteRejectsShellMeta(t *testing.T) {
 	form := url.Values{}
 	form.Set("command", "add-aggregate")
 	form.Set("name", "order;touch /tmp/pwned")
-	resp, err := http.PostForm(ts.URL+"/commands/execute", form)
+	resp, err := postFormWithOrigin(ts.URL+"/commands/execute", form, ts.URL)
 	if err != nil {
 		t.Fatalf("POST /commands/execute: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_ExecuteRejectsCrossOrigin(t *testing.T) {
+	srv := newTestServer(t, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("command", "show")
+	// Origin is a different scheme+host; should be rejected even when
+	// every other field is valid.
+	resp, err := postFormWithOrigin(ts.URL+"/commands/execute", form, "http://attacker.example")
+	if err != nil {
+		t.Fatalf("POST /commands/execute: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	if !strings.Contains(body, "tidak sama dengan host") {
+		t.Errorf("body missing cross-origin message: %q", body)
+	}
+}
+
+func TestServer_ExecuteRejectsMissingOrigin(t *testing.T) {
+	srv := newTestServer(t, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("command", "show")
+	resp, err := postFormWithOrigin(ts.URL+"/commands/execute", form, "")
+	if err != nil {
+		t.Fatalf("POST /commands/execute: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	if !strings.Contains(body, "origin header wajib") {
+		t.Errorf("body missing missing-origin message: %q", body)
 	}
 }
 
@@ -245,7 +352,7 @@ func TestServer_ExecuteHappyPath(t *testing.T) {
 	}
 	form := url.Values{}
 	form.Set("command", "show")
-	resp, err := client.PostForm(ts.URL+"/commands/execute", form)
+	resp, err := postFormWithOriginClient(client, ts.URL+"/commands/execute", form, ts.URL)
 	if err != nil {
 		t.Fatalf("POST /commands/execute: %v", err)
 	}
@@ -409,7 +516,7 @@ func TestServer_NoRunnerLeak(t *testing.T) {
 	}
 	form := url.Values{}
 	form.Set("command", "show")
-	resp, err := client.PostForm(ts.URL+"/commands/execute", form)
+	resp, err := postFormWithOriginClient(client, ts.URL+"/commands/execute", form, ts.URL)
 	if err != nil {
 		t.Fatalf("POST /commands/execute: %v", err)
 	}
@@ -439,6 +546,25 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// postFormWithOrigin POSTs a form with an explicit Origin header so the
+// same-origin check in handleExecute accepts it. Pass an empty origin
+// to simulate a non-browser client that omits the header.
+func postFormWithOrigin(url string, form url.Values, origin string) (*http.Response, error) {
+	return postFormWithOriginClient(http.DefaultClient, url, form, origin)
+}
+
+func postFormWithOriginClient(client *http.Client, url string, form url.Values, origin string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	return client.Do(req)
 }
 
 // guard against unused import linter complaint if context shrinks.

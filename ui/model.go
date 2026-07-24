@@ -55,10 +55,17 @@ type NavLink struct {
 	Key  string
 }
 
-// OverviewPage is the rendered dashboard for `GET /`.
+// OverviewPage is the rendered dashboard for `GET /`. Title and
+// Subtitle are duplicated from the layout fields so the body template
+// can render them through its own dot without relying on the layout
+// shell — keeping the body self-contained also keeps the render path
+// (overview.html) free of silent template errors when the title is
+// missing.
 type OverviewPage struct {
 	Kind          PageKind
 	Project       inspector.ProjectModel
+	Title         string
+	Subtitle      string
 	EventCount    int
 	HandlerCount  int
 	QueryCount    int
@@ -74,6 +81,10 @@ type AggregateRow struct {
 }
 
 // AggregateDetailPage is the rendered `GET /aggregates/{name}` page.
+// Wire-graph plumbing (chains) used to live here but the matching was
+// unreliable for single-aggregate projections, so the field has been
+// removed; the page focuses on handlers, queries, and projection
+// workers for now.
 type AggregateDetailPage struct {
 	Kind     PageKind
 	Project  inspector.ProjectModel
@@ -82,7 +93,6 @@ type AggregateDetailPage struct {
 	Handlers []inspector.Handler
 	Queries  []inspector.Query
 	Workers  []inspector.Projection
-	Chains   []inspector.WireNode
 	Other    []string
 }
 
