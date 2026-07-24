@@ -80,7 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/commands/runs/", s.handleRun)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.staticFS))))
 
-	return logMiddleware(mux)
+	return securityHeadersMiddleware(logMiddleware(mux))
 }
 
 // parseTemplates loads every template file and wires up the funcMap.
@@ -119,6 +119,23 @@ func logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		fmt.Printf("esb ui %s %s %s\n", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+// securityHeadersMiddleware applies the minimum response headers
+// every page in the UI must carry. It is the regression net for the
+// X-Content-Type-Options header the original renderLayout set only on
+// the HTML render path; without this middleware /healthz and the
+// /static/ file server would silently omit it. Cache-Control:
+// no-store keeps intermediate caches from holding the /commands/runs
+// stream — a shared proxy caching a run-id response would otherwise
+// replay a finished run as if it were still in progress.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
 	})
 }
 

@@ -543,6 +543,154 @@ func TestServer_NoRunnerLeak(t *testing.T) {
 	t.Fatal("run did not finish in time")
 }
 
+// TestParseTemplates_RendersAllRoutes locks in the discipline the
+// 82409ae follow-up commit paid for: html/template must parse every
+// embedded file up-front, and every body template referenced by
+// renderBody must render a synthetic page without silently inlining
+// a "<!-- render error: ... -->" marker. If a future contributor
+// renames a template file or drops a field from a Page struct, this
+// test fails loudly at `go test` time rather than leaving the user
+// staring at a blank browser tab.
+func TestParseTemplates_RendersAllRoutes(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+
+	// Every template the layout extends or the body switch dispatches
+	// to must be present. A missing file fails parseTemplates above,
+	// but a silent typo (e.g. overview.html written as overveiw.html)
+	// would parse fine while leaving the body branch to fail at
+	// render time. Asserting the names here catches that.
+	wantNames := []string{
+		"layout", "overview", "aggregate_detail",
+		"commands", "run_detail", "error",
+	}
+	for _, name := range wantNames {
+		if tmpl.Lookup(name) == nil {
+			t.Errorf("template %q not registered", name)
+		}
+	}
+
+	// Now build a Server against a synthetic project and render each
+	// body kind. If a route's template expects a field the page
+	// struct no longer provides, renderBody silently substitutes an
+	// error comment; assert that doesn't happen.
+	srv, err := NewServer(Options{ProjectRoot: makeProjectRoot(t)})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		page interface{}
+	}{
+		{"overview", OverviewPage{Kind: PageOverview, Title: "Project Overview", Subtitle: "demo — 0 aggregates", AggregateRows: []AggregateRow{}}},
+		{"aggregate_detail", AggregateDetailPage{Kind: PageAggregateDetail, Name: "demo", Events: []string{"DemoEvent"}}},
+		{"commands", CommandsPage{Kind: PageCommands, Commands: PublicCommands()}},
+		{"run_detail", RunPage{Kind: PageRunDetail, Found: true, Running: false, Run: &Run{ID: "r-1", CommandID: "show", Argv: []string{"esb", "show"}, Dir: "/tmp", Status: RunSucceed, ExitCode: 0}}},
+		{"error", ErrorPage{Kind: PageError, Title: "t", Message: "m", Code: 400}},
+	}
+	for _, tc := range cases {
+		body := srv.renderBody(tc.page)
+		if strings.Contains(body, "render error") {
+			t.Errorf("%s body contained render error: %q", tc.name, body)
+		}
+		if strings.Contains(body, "render error:") {
+			t.Errorf("%s body contained render error: %q", tc.name, body)
+		}
+	}
+}
+
+// TestSecurityHeaders_NoSniff_NoCacheBypass locks in the minimum
+// security headers every response should carry. The middleware that
+// originally shipped set only Content-Type; a future contributor
+// removing X-Content-Type-Options would silently re-enable MIME
+// sniffing, and a future caching layer that omits Cache-Control would
+// let /commands/runs/<id> leak historical data through shared caches.
+func TestSecurityHeaders_NoSniff_NoCacheBypass(t *testing.T) {
+	srv := newTestServer(t, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	pages := []struct {
+		path   string
+		method string
+		body   string
+	}{
+		{"/healthz", http.MethodGet, ""},
+		{"/", http.MethodGet, ""},
+		{"/commands", http.MethodGet, ""},
+		{"/commands/runs/missing", http.MethodGet, ""},
+	}
+	for _, p := range pages {
+		var resp *http.Response
+		var err error
+		if p.method == http.MethodGet {
+			resp, err = http.Get(ts.URL + p.path)
+		} else {
+			resp, err = http.Post(ts.URL+p.path, "application/x-www-form-urlencoded", strings.NewReader(p.body))
+		}
+		if err != nil {
+			t.Fatalf("%s %s: %v", p.method, p.path, err)
+		}
+		resp.Body.Close()
+
+		if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s %s: X-Content-Type-Options = %q, want nosniff", p.method, p.path, got)
+		}
+		if got := resp.Header.Get("Cache-Control"); got == "" {
+			t.Errorf("%s %s: Cache-Control missing (got empty)", p.method, p.path)
+		}
+	}
+}
+
+// TestUI_RejectsCommandForm_EmptyName is the regression that locks in
+// the 350eec9 hardening: a form submission whose required field is
+// empty (or whitespace-only, which ParseForm strips) must be
+// rejected with 400 and must not start a run. The run store must be
+// untouched afterwards.
+func TestUI_RejectsCommandForm_EmptyName(t *testing.T) {
+	runner := &fakeRunner{}
+	srv := newTestServer(t, runner)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{"empty", "name", ""},
+		{"whitespace", "name", "   \n   "},
+		{"newlines_only", "name", "\n\n"},
+	}
+	for _, tc := range cases {
+		form := url.Values{}
+		form.Set("command", "add-aggregate")
+		form.Set(tc.field, tc.value)
+		resp, err := postFormWithOrigin(ts.URL+"/commands/execute", form, ts.URL)
+		if err != nil {
+			t.Fatalf("POST /commands/execute (%s): %v", tc.name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", tc.name, resp.StatusCode)
+		}
+		if srv.RunStore().Busy() {
+			t.Errorf("%s: run store became busy after rejected submission", tc.name)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("runner.calls = %d, want 0 (no run should have started)", len(runner.calls))
+	}
+	// The store should still be empty — no successful runs were
+	// registered.
+	if got := len(srv.RunStore().runs); got != 0 {
+		t.Errorf("runs map len = %d, want 0", got)
+	}
+}
+
 // helpers ------------------------------------------------------------
 
 func readAll(r io.Reader) (string, error) {

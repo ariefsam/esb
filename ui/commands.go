@@ -368,6 +368,12 @@ func (ExecRunner) Run(ctx context.Context, projectRoot string, argv []string, st
 // surfaces this as RunTimedOut rather than a generic failure.
 var ErrTimeout = errors.New("command exceeded timeout")
 
+// runStoreCap bounds the number of runs kept in memory. When the
+// store reaches this size Start rejects the new run with ErrStoreFull
+// so a runaway tab cannot exhaust process memory. The value matches
+// the number locked in by Phase 1 of the approved plan.
+const runStoreCap = 1000
+
 // RunStore keeps the in-memory map of run id -> *Run. Only one run may
 // be active at a time so the UI never races with itself on generated
 // file writes.
@@ -382,6 +388,11 @@ type RunStore struct {
 func NewRunStore() *RunStore {
 	return &RunStore{runs: map[string]*Run{}}
 }
+
+// Cap returns the maximum number of runs the store will keep in
+// memory. Exposed so tests and templates can reference the same number
+// the store enforces.
+func (s *RunStore) Cap() int { return runStoreCap }
 
 // Busy reports whether another run is in progress.
 func (s *RunStore) Busy() bool {
@@ -419,7 +430,8 @@ func (s *RunStore) StatusSnapshot(id string) (status RunStatus, exitCode int, ok
 }
 
 // Start launches the command behind catalog[id] and records a *Run.
-// The returned error is ErrConflict when another run is still active.
+// The returned error is ErrConflict when another run is still active,
+// or ErrStoreFull when the in-memory run store has reached runStoreCap.
 // The parent context should outlive the HTTP request that triggered
 // the run so the child process isn't cancelled the moment the handler
 // redirects.
@@ -434,6 +446,10 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 	if s.active {
 		s.mu.Unlock()
 		return nil, ErrConflict
+	}
+	if len(s.runs) >= runStoreCap {
+		s.mu.Unlock()
+		return nil, ErrStoreFull
 	}
 	s.active = true
 	run := &Run{
@@ -455,6 +471,12 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 // ErrConflict signals that the UI rejected a second run while one is
 // already in progress.
 var ErrConflict = errors.New("another command is already running")
+
+// ErrStoreFull signals that the in-memory run store is full. This is
+// the safety net introduced in Phase 1 of the approved plan: a
+// runaway tab cannot exhaust process memory by hammering the execute
+// endpoint. The store keeps at most runStoreCap runs.
+var ErrStoreFull = errors.New("run store is full")
 
 func (s *RunStore) execute(parent context.Context, run *Run, runner ProcessRunner) {
 	runTimeoutMu.RLock()

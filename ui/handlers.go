@@ -286,6 +286,21 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if errors.Is(err, ErrStoreFull) {
+			s.renderLayout(w, http.StatusServiceUnavailable, Layout{
+				Title: "Run store penuh",
+				Body: s.renderBody(ErrorPage{
+					Kind:    PageError,
+					Title:   "Run store penuh",
+					Message: fmt.Sprintf("Run store sudah mencapai batas %d. Restart esb ui untuk membersihkan.", s.runs.Cap()),
+					Back:    "/commands",
+					Code:    http.StatusServiceUnavailable,
+				}),
+				Root: s.projectRoot,
+				Nav:  defaultNav("commands"),
+			})
+			return
+		}
 		s.badRequest(w, r, err.Error())
 		return
 	}
