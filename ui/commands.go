@@ -28,6 +28,7 @@ const maxOutputBytes = 1 << 20
 // Declared as a var (not const) so tests can shrink it to keep the
 // timeout suite fast.
 var runTimeout = 5 * time.Minute
+var runTimeoutMu sync.RWMutex
 
 // CatalogEntry is one allow-listed command. It owns the metadata used
 // to render the form and the BuildArgv function that turns validated
@@ -285,18 +286,20 @@ func onlyValue(form FormInput, key string) string {
 }
 
 // ParseForm converts a url.Values map into the FormInput shape used by
-// Build functions. List fields collapse blank lines and trim spaces;
-// the resulting values are passed individually as argv positions.
+// Build functions. Each submitted value is split on newlines so textarea
+// list fields become individual argv positions; blank lines are ignored.
 func ParseForm(values map[string][]string) FormInput {
 	out := FormInput{}
 	for k, vs := range values {
 		clean := make([]string, 0, len(vs))
-		for _, v := range vs {
-			v = strings.TrimSpace(v)
-			if v == "" {
-				continue
+		for _, raw := range vs {
+			for _, v := range strings.Split(raw, "\n") {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					continue
+				}
+				clean = append(clean, v)
 			}
-			clean = append(clean, v)
 		}
 		out[k] = clean
 	}
@@ -336,14 +339,11 @@ func (ExecRunner) Run(ctx context.Context, projectRoot string, argv []string, st
 	}
 	bin, lookupErr := exec.LookPath(argv[0])
 	if lookupErr != nil {
-		// argv[0] may be a bare "esb" not on PATH; fall back to the
-		// current executable if its base name matches, which keeps
-		// the child process on the same Go binary.
-		if self, err := os.Executable(); err == nil {
-			bin = self
-		} else {
+		self, err := os.Executable()
+		if err != nil || filepath.Base(self) != filepath.Base(argv[0]) {
 			return 1, fmt.Errorf("locate %s: %w", argv[0], lookupErr)
 		}
+		bin = self
 	}
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = projectRoot
@@ -390,13 +390,19 @@ func (s *RunStore) Busy() bool {
 	return s.active
 }
 
-// Get returns the Run for id, or nil if unknown. Callers must treat
-// the returned pointer as a snapshot and must not rely on field values
-// across goroutine boundaries — use StatusSnapshot for that.
+// Get returns an independent snapshot of the Run for id, or nil if
+// unknown. The returned pointer and its slices may be safely read or
+// modified without racing the executor goroutine.
 func (s *RunStore) Get(id string) *Run {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.runs[id]
+	r, ok := s.runs[id]
+	if !ok {
+		return nil
+	}
+	copy := *r
+	copy.Argv = append([]string(nil), r.Argv...)
+	return &copy
 }
 
 // StatusSnapshot returns the run's current status and exit code under
@@ -422,6 +428,7 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 	if err != nil {
 		return nil, err
 	}
+	argv = append([]string(nil), argv...)
 
 	s.mu.Lock()
 	if s.active {
@@ -450,7 +457,10 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 var ErrConflict = errors.New("another command is already running")
 
 func (s *RunStore) execute(parent context.Context, run *Run, runner ProcessRunner) {
-	ctx, cancel := context.WithTimeout(parent, runTimeout)
+	runTimeoutMu.RLock()
+	timeout := runTimeout
+	runTimeoutMu.RUnlock()
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	out := &capWriter{limit: maxOutputBytes}

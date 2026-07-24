@@ -67,7 +67,9 @@ Examples:
 
 		errCh := make(chan error, 1)
 		go func() {
-			fmt.Printf("esb ui listening on http://%s\n", ln.Addr().String())
+			if !uiNoOpen {
+				fmt.Printf("esb ui listening on http://%s\n", ln.Addr().String())
+			}
 			fmt.Printf("project root: %s\n", root)
 			if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
@@ -104,6 +106,5 @@ Examples:
 
 func init() {
 	uiCmd.Flags().StringVar(&uiAddr, "addr", "127.0.0.1:8787", "address to bind the UI to (host:port)")
-	uiCmd.Flags().BoolVar(&uiNoOpen, "no-open", false, "do not print the local URL after start (reserved for future use)")
-	_ = uiNoOpen
+	uiCmd.Flags().BoolVar(&uiNoOpen, "no-open", false, "do not print the local URL after start")
 }

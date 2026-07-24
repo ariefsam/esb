@@ -295,6 +295,15 @@ func TestServer_ExecuteRejectsShellMeta(t *testing.T) {
 	}
 }
 
+func TestCheckSameOriginRejectsDifferentScheme(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8787/commands/execute", nil)
+	r.Host = "127.0.0.1:8787"
+	r.Header.Set("Origin", "https://127.0.0.1:8787")
+	if err := checkSameOrigin(r); err == nil {
+		t.Fatal("expected HTTPS origin to be rejected for HTTP request")
+	}
+}
+
 func TestServer_ExecuteRejectsCrossOrigin(t *testing.T) {
 	srv := newTestServer(t, nil)
 	ts := httptest.NewServer(srv.Handler())
@@ -313,7 +322,7 @@ func TestServer_ExecuteRejectsCrossOrigin(t *testing.T) {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 	body, _ := readAll(resp.Body)
-	if !strings.Contains(body, "tidak sama dengan host") {
+	if !strings.Contains(body, "tidak sama dengan") {
 		t.Errorf("body missing cross-origin message: %q", body)
 	}
 }

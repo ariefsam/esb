@@ -327,8 +327,12 @@ func checkSameOrigin(r *http.Request) error {
 	if u.Host == "" {
 		return fmt.Errorf("origin %q tidak punya host", origin)
 	}
-	if !strings.EqualFold(u.Host, host) {
-		return fmt.Errorf("origin %q tidak sama dengan host %q", u.Host, host)
+	requestScheme := "http"
+	if r.TLS != nil {
+		requestScheme = "https"
+	}
+	if !strings.EqualFold(u.Scheme, requestScheme) || !strings.EqualFold(u.Host, host) {
+		return fmt.Errorf("origin %q tidak sama dengan request origin %s://%s", origin, requestScheme, host)
 	}
 	return nil
 }
@@ -347,6 +351,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get returns a copy, so the handler can render it after releasing
+	// the store lock without racing the executor.
 	run := s.runs.Get(id)
 	if run == nil {
 		s.notFound(w, r, "Run tidak ditemukan", fmt.Sprintf("Run %s tidak ada di memory store.", id))

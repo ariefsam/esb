@@ -124,11 +124,11 @@ func TestBuildArgv_RejectsInvalidNames(t *testing.T) {
 		form    FormInput
 	}{
 		{"add-aggregate", FormInput{"name": {"order;touch /tmp/pwned"}}},
-		{"add-aggregate", FormInput{"name": {"Order"}}},     // not snake_case
-		{"add-aggregate", FormInput{"name": {""}}},           // missing required
+		{"add-aggregate", FormInput{"name": {"Order"}}},                            // not snake_case
+		{"add-aggregate", FormInput{"name": {""}}},                                 // missing required
 		{"add-event", FormInput{"aggregate": {"order"}, "event": {"orderPlaced"}}}, // not PascalCase
 		{"add-event", FormInput{"aggregate": {"order"}, "event": {"OrderPlaced"}, "fields": {"amount;evil"}}},
-		{"add-projection", FormInput{"name": {"x"}, "aggregates": {}}},  // empty list
+		{"add-projection", FormInput{"name": {"x"}, "aggregates": {}}}, // empty list
 		{"add-projection", FormInput{"name": {"x"}, "aggregates": {"bad name"}}},
 		{"add-handler", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
 		{"add-query", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
@@ -147,17 +147,35 @@ func TestBuildArgv_RejectsUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestParseForm_StripsBlankLines(t *testing.T) {
+func TestParseForm_SplitsTextareaListValues(t *testing.T) {
 	form := ParseForm(map[string][]string{
-		"fields": {"amount:int64", "", "  ", "currency:string"},
+		"fields": {"text\namount:int64\n currency:string "},
 	})
 	got := form["fields"]
-	want := []string{"amount:int64", "currency:string"}
+	want := []string{"text", "amount:int64", "currency:string"}
 	if !equalStrings(got, want) {
-		t.Errorf("parsed fields = %v, want %v", got, want)
+		t.Errorf("parsed textarea fields = %v, want %v", got, want)
 	}
 }
 
+func TestRunStore_GetReturnsIndependentSnapshot(t *testing.T) {
+	store := NewRunStore()
+	runner := &fakeRunner{}
+	run, err := store.Start(context.Background(), "/tmp", "show", FormInput{}, runner)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	snapshot := store.Get(run.ID)
+	if snapshot == nil {
+		t.Fatal("missing snapshot")
+	}
+	snapshot.Status = RunFailed
+	snapshot.Argv[0] = "changed"
+	stored := store.Get(run.ID)
+	if stored.Status == RunFailed || stored.Argv[0] == "changed" {
+		t.Fatalf("Get returned mutable store data: %+v", stored)
+	}
+}
 func TestRunStore_OneActiveRun(t *testing.T) {
 	store := NewRunStore()
 	runner := &fakeRunner{delay: 50 * time.Millisecond}
@@ -224,10 +242,15 @@ func TestRunStore_TimeoutMarksTimedOut(t *testing.T) {
 	store := NewRunStore()
 	runner := &fakeRunner{delay: 100 * time.Millisecond}
 
-	// Patch the timeout to a much smaller value so the test is fast.
 	prevTimeout := runTimeout
+	runTimeoutMu.Lock()
 	runTimeout = 30 * time.Millisecond
-	defer func() { runTimeout = prevTimeout }()
+	runTimeoutMu.Unlock()
+	defer func() {
+		runTimeoutMu.Lock()
+		runTimeout = prevTimeout
+		runTimeoutMu.Unlock()
+	}()
 
 	run, err := store.Start(context.Background(), "/tmp", "show", FormInput{}, runner)
 	if err != nil {
