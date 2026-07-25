@@ -66,6 +66,7 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open projection db: %w", err)
 	}
+	_ = db
 
 	router := mux.NewRouter()
 	server.RegisterRoutes(router)

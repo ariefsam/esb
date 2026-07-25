@@ -205,5 +205,5 @@ func (s *LocalStore) AsSQLDB() (*sql.DB, error) {
 	if s.db == nil {
 		return nil, errors.New("nil local store db")
 	}
-	return s.db.DB(), nil
+	return s.db.DB()
 }

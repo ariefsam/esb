@@ -152,6 +152,9 @@ func (e *HTTPError) Error() string {
 // ErrKVNotFound is returned by KVGet when the key does not exist or has expired.
 var ErrKVNotFound = errors.New("kv: key not found or expired")
 
+// ErrConflict is returned when an event version already exists for an aggregate.
+var ErrConflict = errors.New("event store: version conflict")
+
 // KVSet stores value under key with the given TTL in seconds.
 func (c *Client) KVSet(ctx context.Context, key, value string, ttlSeconds int) error {
 	body := map[string]any{"value": value, "ttl_seconds": ttlSeconds}
