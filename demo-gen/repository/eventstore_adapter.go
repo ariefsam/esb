@@ -1,0 +1,37 @@
+package repository
+
+import (
+	"context"
+
+	"/tmp/demo-gen/eventstore"
+)
+
+// EventStoreAdapter wraps the eventstore HTTP client to implement domain.EventRepository.
+// It is the remote-store adapter; the sibling LocalAdapter in repository/local_adapter.go
+// implements the same interface against an embedded SQLite store.
+type EventStoreAdapter struct {
+	client *eventstore.Client
+}
+
+func NewEventStoreAdapter(client *eventstore.Client) *EventStoreAdapter {
+	return &EventStoreAdapter{client: client}
+}
+
+func (a *EventStoreAdapter) StoreAtomic(ctx context.Context, e eventstore.Event, expectedVersion int64) (eventstore.Event, error) {
+	return a.client.Store(ctx, eventstore.StoreRequest{
+		AggregateName:   e.AggregateName,
+		AggregateID:     e.AggregateID,
+		EventName:       e.EventName,
+		Data:            e.Data,
+		ExpectedVersion: expectedVersion,
+		IdempotencyKey:  e.IdempotencyKey,
+	})
+}
+
+func (a *EventStoreAdapter) Retrieve(ctx context.Context, aggregateID, aggregateName string, afterVersion int64) ([]eventstore.Event, error) {
+	return a.client.Events(ctx, aggregateID, aggregateName, afterVersion)
+}
+
+func (a *EventStoreAdapter) FetchAll(ctx context.Context, aggregateNames []string, afterID uint, limit int) ([]eventstore.Event, error) {
+	return a.client.EventsAll(ctx, aggregateNames, afterID, limit)
+}

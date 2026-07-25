@@ -1,0 +1,44 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"mydemo/projection"
+	"mydemo/wire"
+)
+
+func main() {
+	app, err := wire.NewApp()
+	if err != nil {
+		log.Fatalf("init app: %v", err)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	workers := []projection.Worker{
+		// esb:inject:projection-workers
+	}
+	for _, w := range workers {
+		go w.Run(ctx)
+	}
+
+	fmt.Printf("Starting mydemo on %s\n", app.Env.Addr)
+	srv := &http.Server{
+		Addr:    app.Env.Addr,
+		Handler: app.Handler,
+	}
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background()) //nolint:errcheck
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server: %v", err)
+	}
+}
