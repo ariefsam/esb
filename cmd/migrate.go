@@ -126,7 +126,20 @@ func migrateToESB(cmd *cobra.Command) error {
 // the embedded SQLite. It is the rollback path — useful when a
 // remote deploy fails and the user wants to keep development local.
 //
-// Refuses to overwrite existing events unless --force is passed.
+// Schema: if the events table does not exist in the target SQLite,
+// ensureSchema creates it before any insert. This is required because
+// `migrate to-embedded` may run against a freshly-initialised project
+// that has never booted the embedded server.
+//
+// Overwrite: --force clears the existing events table before importing.
+// Without --force the migration refuses to start when the table is
+// non-empty, since mixing local and remote histories would corrupt the
+// event stream.
+//
+// Resumability: the INSERT uses ON CONFLICT DO NOTHING on the unique
+// (aggregate_name, aggregate_id, version) index. A re-run after a
+// partial import silently skips already-imported events and continues
+// from the next batch.
 func migrateToEmbedded(cmd *cobra.Command) error {
 	sourceDSN, err := resolveSourceDSN()
 	if err != nil {
@@ -136,12 +149,22 @@ func migrateToEmbedded(cmd *cobra.Command) error {
 		return err
 	}
 
+	if err := ensureSchema(sourceDSN); err != nil {
+		return fmt.Errorf("ensure schema: %w", err)
+	}
+
 	existing, err := countEventsInSQLite(sourceDSN)
 	if err != nil {
 		return fmt.Errorf("inspect target: %w", err)
 	}
 	if existing > 0 && !migrateForce {
 		return fmt.Errorf("target SQLite sudah punya %d event — pakai --force untuk overwrite", existing)
+	}
+	if existing > 0 && migrateForce {
+		if err := truncateEvents(sourceDSN); err != nil {
+			return fmt.Errorf("--force: truncate target: %w", err)
+		}
+		fmt.Printf("--force: cleared %d existing events from target\n", existing)
 	}
 
 	client, err := newESBClientForMigration()
@@ -170,6 +193,56 @@ func migrateToEmbedded(cmd *cobra.Command) error {
 	fmt.Printf("imported %d events from ESB server\n", imported)
 	if err := writeMigrationState(sourceDSN, "to-embedded", imported); err != nil {
 		return fmt.Errorf("commit migration state: %w", err)
+	}
+	return nil
+}
+
+// eventsSchema is the CREATE TABLE statement used by both the
+// migrate runner and the generated LocalStore. The unique index on
+// (aggregate_name, aggregate_id, version) is what makes the migration
+// safely resumable — INSERT OR IGNORE / ON CONFLICT DO NOTHING can
+// rely on it.
+const eventsSchema = `CREATE TABLE IF NOT EXISTS events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	aggregate_name TEXT NOT NULL,
+	aggregate_id TEXT NOT NULL,
+	event_name TEXT NOT NULL,
+	version INTEGER NOT NULL,
+	data BLOB,
+	time_millis INTEGER NOT NULL DEFAULT 0,
+	correlation_id TEXT,
+	causation_id TEXT,
+	idempotency_key TEXT,
+	UNIQUE(aggregate_name, aggregate_id, version)
+)`
+
+// ensureSchema creates the events table when it is missing. Mirrors
+// the GORM AutoMigrate output from the generated LocalStore so the
+// raw-SQL migrator can write into the same database.
+func ensureSchema(dsn string) error {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.Exec(eventsSchema); err != nil {
+		return err
+	}
+	return nil
+}
+
+// truncateEvents removes every row from the events table. Called by
+// migrateToEmbedded when --force is set so the import is a true
+// overwrite of the server snapshot rather than a merge with stale
+// local events.
+func truncateEvents(dsn string) error {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DELETE FROM events`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -296,9 +369,10 @@ func countEventsInSQLite(dsn string) (int, error) {
 }
 
 // insertEventsIntoSQLite writes a batch to the embedded SQLite.
-// Unique constraint errors from a re-run are ignored — the
-// migration is idempotent on (aggregate_name, aggregate_id,
-// version) via the unique index defined by the LocalStore schema.
+// The INSERT uses ON CONFLICT DO NOTHING on the unique
+// (aggregate_name, aggregate_id, version) index so a partial-import
+// resume skips already-imported rows instead of failing. Callers
+// that need true overwrite must call truncateEvents() first.
 func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -311,7 +385,8 @@ func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 		return err
 	}
 	stmt, err := tx.Prepare(`INSERT INTO events (aggregate_name, aggregate_id, event_name, version, data, time_millis, correlation_id, causation_id, idempotency_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(aggregate_name, aggregate_id, version) DO NOTHING`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -319,31 +394,15 @@ func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 	defer stmt.Close()
 
 	for _, e := range events {
-		_, err := stmt.Exec(
+		if _, err := stmt.Exec(
 			e.AggregateName, e.AggregateID, e.EventName, e.Version,
 			[]byte(e.Data), e.TimeMillis, e.CorrelationID, e.CausationID, e.IdempotencyKey,
-		)
-		if err != nil {
-			if isUniqueConstraintError(err) {
-				continue
-			}
+		); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 	}
 	return tx.Commit()
-}
-
-// isUniqueConstraintError reports whether err is a SQLite unique
-// constraint violation. Used by insertEventsIntoSQLite to silently
-// ignore already-migrated rows.
-func isUniqueConstraintError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "UNIQUE constraint failed") ||
-		strings.Contains(msg, "constraint failed: UNIQUE")
 }
 
 // chunkEvents splits events into batches of size n. The last chunk

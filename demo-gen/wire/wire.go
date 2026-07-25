@@ -21,6 +21,15 @@ import (
 	// esb:inject:wire-imports
 )
 
+// validEventStoreMode is the closed set of values EVENT_STORE_MODE
+// accepts. A typo (e.g. "esb-sever") would otherwise silently fall
+// through to the embedded branch and split production event history
+// — see buildEventRepository.
+var validEventStoreMode = map[string]bool{
+	"embedded":   true,
+	"esb-server": true,
+}
+
 // Env holds all configuration loaded from environment variables.
 type Env struct {
 	Addr           string
@@ -57,8 +66,17 @@ func NewApp() (*App, error) {
 	if env.EventStoreMode == "embedded" && env.EventStoreDSN == "" {
 		env.EventStoreDSN = env.DBDSN
 	}
+	if !validEventStoreMode[env.EventStoreMode] {
+		return nil, fmt.Errorf("unknown EVENT_STORE_MODE %q (expected 'embedded' or 'esb-server')", env.EventStoreMode)
+	}
 
-	esClient := eventstore.New(env.ESBURL, env.TenantID, env.ProjectID, env.JWTIssuer, mustLoadKey())
+	// The HTTP client is only required when EVENT_STORE_MODE=esb-server.
+	// Embedded mode must not require private.pem so a freshly-generated
+	// project is immediately runnable per README.md.
+	var esClient *eventstore.Client
+	if env.EventStoreMode == "esb-server" {
+		esClient = eventstore.New(env.ESBURL, env.TenantID, env.ProjectID, env.JWTIssuer, mustLoadKey())
+	}
 	eventRepo := buildEventRepository(env, esClient)
 	_ = eventRepo
 
@@ -90,8 +108,11 @@ func buildEventRepository(env *Env, client *eventstore.Client) domain.EventRepos
 		if env.ESBURL == "" {
 			panic("EVENT_STORE_MODE=esb-server requires ESB_URL to be set")
 		}
+		if client == nil {
+			panic("EVENT_STORE_MODE=esb-server requires the HTTP eventstore client (private.pem missing?)")
+		}
 		return repository.NewEventStoreAdapter(client)
-	default:
+	case "embedded":
 		db, err := projection.NewProjectionDB(env.EventStoreDSN)
 		if err != nil {
 			panic(fmt.Sprintf("open embedded event store: %v", err))
@@ -101,6 +122,12 @@ func buildEventRepository(env *Env, client *eventstore.Client) domain.EventRepos
 		}
 		store := eventstore.NewLocalStore(db)
 		return repository.NewLocalAdapter(store)
+	default:
+		// NewApp validates EVENT_STORE_MODE before we get here, so
+		// reaching this branch means someone changed validEventStoreMode
+		// without updating buildEventRepository — fail loud rather than
+		// silently defaulting to embedded.
+		panic(fmt.Sprintf("buildEventRepository: unhandled EVENT_STORE_MODE %q", env.EventStoreMode))
 	}
 }
 

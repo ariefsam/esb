@@ -274,14 +274,17 @@ func buildStoragePage(model inspector.ProjectModel, info inspector.StorageInfo) 
 }
 
 // modeLabel renders the human-friendly mode name for the badge.
-// Embedded → "lokal", esb-server → "remote". Kept as a function
-// so the wording is locked in one place.
+// Embedded → "lokal", esb-server → "remote", unknown → "tidak dikenal"
+// so a typo like "esb-sever" surfaces in the UI instead of being
+// silently treated as one of the canonical modes.
 func modeLabel(mode string) string {
 	switch mode {
 	case inspector.StorageModeESBServer:
 		return "esb-server"
 	case inspector.StorageModeEmbedded:
 		return "embedded"
+	case inspector.StorageModeUnknown:
+		return "tidak dikenal — cek EVENT_STORE_MODE di .env"
 	}
 	return mode
 }

@@ -194,16 +194,51 @@ func TestBuildArgv_MigrateToESBRejectsMissingTenant(t *testing.T) {
 	}
 }
 
-// TestBuildArgv_MigrateToEmbedded exercises the rollback path
-// producing a fixed argv regardless of form input.
+// TestBuildArgv_MigrateToEmbedded exercises the rollback path:
+// the form must accept esb_url/tenant_id/project_id and emit the
+// matching CLI flags. The optional force checkbox maps to --force.
 func TestBuildArgv_MigrateToEmbedded(t *testing.T) {
-	got, err := BuildArgv("migrate-to-embedded", FormInput{})
+	got, err := BuildArgv("migrate-to-embedded", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+		"force":      {"true"},
+	})
 	if err != nil {
 		t.Fatalf("BuildArgv: %v", err)
 	}
-	want := []string{"esb", "migrate", "to-embedded", "--force"}
+	want := []string{
+		"esb", "migrate", "to-embedded",
+		"--esb-url", "http://esb.internal:8080",
+		"--tenant", "demo",
+		"--project", "toko",
+		"--force",
+	}
 	if !equalStrings(got, want) {
 		t.Errorf("argv = %v, want %v", got, want)
+	}
+
+	// Force checkbox unchecked → no --force flag.
+	got, err = BuildArgv("migrate-to-embedded", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	})
+	if err != nil {
+		t.Fatalf("BuildArgv (no force): %v", err)
+	}
+	for _, a := range got {
+		if a == "--force" {
+			t.Errorf("argv unexpectedly contains --force when checkbox unchecked: %v", got)
+		}
+	}
+
+	// Missing required field must fail validation.
+	if _, err := BuildArgv("migrate-to-embedded", FormInput{
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	}); err == nil {
+		t.Error("expected error when esb_url missing")
 	}
 }
 
@@ -241,6 +276,33 @@ func TestFindCommand_MigrateEntries(t *testing.T) {
 	for _, id := range []string{"migrate-to-esb", "migrate-to-embedded"} {
 		if findCommand(id) == nil {
 			t.Errorf("findCommand(%q) returned nil", id)
+		}
+	}
+}
+
+// TestMigrateToEmbedded_DeclaresFormFields locks in the field set
+// that ui/templates/migrate.html submits for the to-embedded
+// direction. If a future refactor empties the catalog entry the
+// handleMigrateSubmit handler will reject every form submission
+// with "field tidak dikenal" — exactly the regression we hit before.
+func TestMigrateToEmbedded_DeclaresFormFields(t *testing.T) {
+	cmd := findCommand("migrate-to-embedded")
+	if cmd == nil {
+		t.Fatal("migrate-to-embedded catalog entry not found")
+	}
+	want := map[string]bool{
+		"esb_url":    true,
+		"tenant_id":  true,
+		"project_id": true,
+		"force":      true,
+	}
+	got := map[string]bool{}
+	for _, f := range cmd.Fields {
+		got[f.Name] = true
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("migrate-to-embedded catalog missing field %q (have %v)", k, got)
 		}
 	}
 }

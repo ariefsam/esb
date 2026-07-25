@@ -147,7 +147,8 @@ func TestScanStorage_DSNAliasToDB(t *testing.T) {
 // TestScanStorage_AcceptsAliasModes checks the legacy spellings
 // (local, remote, sqlite, esb) normalize to the canonical mode
 // names so a typo in .env does not silently push the app to the
-// wrong code path.
+// wrong code path. Unknown spellings must surface as "unknown"
+// so the UI can warn the operator.
 func TestScanStorage_AcceptsAliasModes(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -158,7 +159,8 @@ func TestScanStorage_AcceptsAliasModes(t *testing.T) {
 		{"esb", StorageModeESBServer},
 		{"server", StorageModeESBServer},
 		{"REMOTE", StorageModeESBServer},
-		{"unknown-mode", StorageModeEmbedded}, // fallback
+		{"unknown-mode", StorageModeUnknown}, // typo surfaces as warning
+		{"esb-sever", StorageModeUnknown},    // common typo for esb-server
 	}
 	for _, tc := range cases {
 		if got := normalizeStorageMode(tc.in); got != tc.want {

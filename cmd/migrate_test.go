@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,15 +181,33 @@ func TestMigrate_InsertEventsIntoSQLite(t *testing.T) {
 	}
 }
 
-// TestMigrate_UniqueConstraintErrorDetects checks the helper that
-// distinguishes unique-violation errors from real I/O failures.
-// A false negative here would silently swallow genuine bugs.
-func TestMigrate_UniqueConstraintErrorDetects(t *testing.T) {
-	if !isUniqueConstraintError(errUnique) {
-		t.Error("expected unique constraint error to be detected")
+// TestMigrate_InsertIsIdempotent locks in the resumable import:
+// re-inserting the same batch must not fail (the unique index +
+// ON CONFLICT DO NOTHING path) and must not duplicate rows. This
+// is what allows a partial import to be retried safely.
+func TestMigrate_InsertIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "events.db")
+	if err := ensureSchema(dsn); err != nil {
+		t.Fatalf("ensureSchema: %v", err)
 	}
-	if isUniqueConstraintError(errSome) {
-		t.Error("regular error should not be flagged as unique constraint")
+	batch := []eventstore.Event{
+		{AggregateName: "order", AggregateID: "a", EventName: "Placed", Version: 1, Data: json.RawMessage(`{"k":"v"}`)},
+		{AggregateName: "order", AggregateID: "a", EventName: "Shipped", Version: 2, Data: json.RawMessage(`{"k":"v"}`)},
+	}
+	if err := insertEventsIntoSQLite(dsn, batch); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	// Re-insert identical batch — must be a silent no-op.
+	if err := insertEventsIntoSQLite(dsn, batch); err != nil {
+		t.Fatalf("re-insert: %v", err)
+	}
+	count, err := countEventsInSQLite(dsn)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count after idempotent re-insert = %d, want 2", count)
 	}
 }
 
@@ -260,6 +279,82 @@ func TestMigrate_RootCmdRegistersSubcommand(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("migrate subcommand not registered on rootCmd")
+	}
+}
+
+// TestMigrate_EnsureSchemaCreatesTable is the regression test for
+// "migrate to-embedded against a fresh database". Before the fix
+// the first batch INSERT failed with "no such table: events".
+func TestMigrate_EnsureSchemaCreatesTable(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "fresh.db")
+	if _, err := os.Create(dsn); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSchema(dsn); err != nil {
+		t.Fatalf("ensureSchema: %v", err)
+	}
+	// Insert must now succeed — the table exists.
+	if err := insertEventsIntoSQLite(dsn, []eventstore.Event{
+		{AggregateName: "order", AggregateID: "a", EventName: "Placed", Version: 1, Data: json.RawMessage(`{"k":"v"}`)},
+	}); err != nil {
+		t.Fatalf("insert after ensureSchema: %v", err)
+	}
+}
+
+// TestMigrate_EnsureSchemaIdempotent guards the "CREATE TABLE IF
+// NOT EXISTS" semantics so calling ensureSchema twice in a row
+// does not error and does not lose data.
+func TestMigrate_EnsureSchemaIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "events.db")
+	if err := ensureSchema(dsn); err != nil {
+		t.Fatalf("ensureSchema (first): %v", err)
+	}
+	if err := insertEventsIntoSQLite(dsn, []eventstore.Event{
+		{AggregateName: "order", AggregateID: "a", EventName: "Placed", Version: 1, Data: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	// Second call must not drop the row.
+	if err := ensureSchema(dsn); err != nil {
+		t.Fatalf("ensureSchema (second): %v", err)
+	}
+	count, err := countEventsInSQLite(dsn)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+// TestMigrate_TruncateEventsClearsAll locks in the --force
+// overwrite semantics. Without this, a re-run against a non-empty
+// SQLite would silently merge local history with the server's
+// history rather than replace it.
+func TestMigrate_TruncateEventsClearsAll(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "events.db")
+	if err := seedMigrateFixture(dsn); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	pre, err := countEventsInSQLite(dsn)
+	if err != nil {
+		t.Fatalf("count pre: %v", err)
+	}
+	if pre == 0 {
+		t.Fatal("seed produced empty table")
+	}
+	if err := truncateEvents(dsn); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	post, err := countEventsInSQLite(dsn)
+	if err != nil {
+		t.Fatalf("count post: %v", err)
+	}
+	if post != 0 {
+		t.Errorf("count after truncate = %d, want 0", post)
 	}
 }
 

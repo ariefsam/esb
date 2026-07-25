@@ -16,6 +16,10 @@ import (
 const (
 	StorageModeEmbedded  = "embedded"
 	StorageModeESBServer = "esb-server"
+	// StorageModeUnknown marks an unrecognised EVENT_STORE_MODE value.
+	// The UI displays it as a warning so a typo (e.g. "esb-sever")
+	// is not silently treated as embedded.
+	StorageModeUnknown = "unknown"
 )
 
 // StorageInfo describes how the project's event store is currently
@@ -137,9 +141,14 @@ func readEnvFile(path string) (map[string]string, error) {
 }
 
 // normalizeStorageMode maps any spelling the user might write into
-// the canonical mode token. Unknown values fall back to embedded
-// because that is the safe default — the generated wire.go does
-// not require ESB_URL when running locally.
+// the canonical mode token. Recognised aliases ("local", "sqlite",
+// "esb", "remote", "server") collapse to their canonical form so
+// `esb show` stays stable across small spelling variants. Truly
+// unknown values fall back to StorageModeUnknown so a typo
+// ("esb-sever") surfaces in the UI as a warning rather than being
+// silently treated as embedded — that is exactly the bug where a
+// production deploy would have its event history split between
+// SQLite and the ESB server.
 func normalizeStorageMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case StorageModeEmbedded, "local", "sqlite":
@@ -147,7 +156,7 @@ func normalizeStorageMode(mode string) string {
 	case StorageModeESBServer, "esb", "remote", "server":
 		return StorageModeESBServer
 	}
-	return StorageModeEmbedded
+	return StorageModeUnknown
 }
 
 // scanSQLiteCounts opens dsn in read-only mode and returns

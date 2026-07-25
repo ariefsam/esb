@@ -132,9 +132,18 @@ var catalog = []CatalogEntry{
 		ID:          "migrate-to-embedded",
 		Label:       "Migrate to embedded",
 		Description: "Rollback: pindahkan event dari server ESB remote ke SQLite lokal.",
-		Fields:      []CommandField{}, // no fields — uses local .env defaults
-		Preview:     []string{"esb", "migrate", "to-embedded", "--force"},
-		Build:       buildMigrateToEmbedded,
+		Fields: []CommandField{
+			// Same fields as the to-esb form so the same-origin
+			// validator can reject unknown keys uniformly; the
+			// operator pre-fills from .env and the handler
+			// passes them through to `esb migrate to-embedded`.
+			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
+			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
+			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
+			{Name: "force", Label: "Force overwrite", Type: "checkbox", Help: "Wajib dicentang bila SQLite sudah berisi event."},
+		},
+		Preview: []string{"esb", "migrate", "to-embedded", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko", "--force"},
+		Build:   buildMigrateToEmbedded,
 	},
 }
 
@@ -371,23 +380,33 @@ func buildMigrateToESB(form FormInput) ([]string, error) {
 }
 
 // buildMigrateToEmbedded constructs the argv for `esb migrate
-// to-embedded`. It has no UI fields — the user clicked a
-// pre-confirmed button — but always passes --force so the operator
-// does not have to remember the flag.
+// to-embedded`. The form requires esb_url / tenant_id / project_id
+// (same as the to-esb direction) so the operator can confirm the
+// remote target without editing .env. The optional force checkbox
+// maps to the --force CLI flag.
 func buildMigrateToEmbedded(form FormInput) ([]string, error) {
-	// Defensive: ignore any form input. The form has no fields
-	// and catalogHasField rejects unknowns, but a future refactor
-	// could change that — keep the loop here so the function
-	// shape matches the rest of the catalog.
-	for k := range form {
-		if k == "force" || k == "direction" {
-			continue
-		}
-		return nil, fmt.Errorf("field %q tidak dikenal untuk command migrate-to-embedded", k)
+	esbURL := onlyValue(form, "esb_url")
+	if err := validateFieldURL(esbURL); err != nil {
+		return nil, fmt.Errorf("esb_url: %w", err)
 	}
-	return []string{
-		"esb", "migrate", "to-embedded", "--force",
-	}, nil
+	tenant := onlyValue(form, "tenant_id")
+	if err := validateFieldTenantProject(tenant); err != nil {
+		return nil, fmt.Errorf("tenant_id: %w", err)
+	}
+	project := onlyValue(form, "project_id")
+	if err := validateFieldTenantProject(project); err != nil {
+		return nil, fmt.Errorf("project_id: %w", err)
+	}
+	argv := []string{
+		"esb", "migrate", "to-embedded",
+		"--esb-url", esbURL,
+		"--tenant", tenant,
+		"--project", project,
+	}
+	if onlyValue(form, "force") == "true" {
+		argv = append(argv, "--force")
+	}
+	return argv, nil
 }
 
 // onlyValue returns the first non-empty value for a key, or "" if none.
