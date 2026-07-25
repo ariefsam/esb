@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ariefsam/esb/inspector"
 )
 
 // testFixture re-uses the inspector fixture file layout. We import the
@@ -564,7 +566,7 @@ func TestParseTemplates_RendersAllRoutes(t *testing.T) {
 	// render time. Asserting the names here catches that.
 	wantNames := []string{
 		"layout", "overview", "aggregate_detail",
-		"commands", "run_detail", "error",
+		"commands", "run_detail", "storage", "migrate", "error",
 	}
 	for _, name := range wantNames {
 		if tmpl.Lookup(name) == nil {
@@ -589,6 +591,8 @@ func TestParseTemplates_RendersAllRoutes(t *testing.T) {
 		{"aggregate_detail", AggregateDetailPage{Kind: PageAggregateDetail, Name: "demo", Events: []string{"DemoEvent"}}},
 		{"commands", CommandsPage{Kind: PageCommands, Commands: PublicCommands()}},
 		{"run_detail", RunPage{Kind: PageRunDetail, Found: true, Running: false, Run: &Run{ID: "r-1", CommandID: "show", Argv: []string{"esb", "show"}, Dir: "/tmp", Status: RunSucceed, ExitCode: 0}}},
+		{"storage", StoragePage{Kind: PageStorage, Mode: "embedded", ModeLabel: "embedded", DSN: "/tmp/demo.db", TotalEvents: 3, HasSQLite: true, CanMigrateToESB: true, Rows: []StorageAggregateRow{{Name: "order", Count: 3}}}},
+		{"migrate", MigrateFormPage{Kind: PageMigrate, Direction: "to-esb", DSN: "/tmp/demo.db", ESBURL: "http://esb.internal:8080", TenantID: "demo", ProjectID: "toko"}},
 		{"error", ErrorPage{Kind: PageError, Title: "t", Message: "m", Code: 400}},
 	}
 	for _, tc := range cases {
@@ -688,6 +692,196 @@ func TestUI_RejectsCommandForm_EmptyName(t *testing.T) {
 	// registered.
 	if got := len(srv.RunStore().runs); got != 0 {
 		t.Errorf("runs map len = %d, want 0", got)
+	}
+}
+
+// TestServer_StoragePageRenders exercises GET /storage against a
+// project with .env containing EVENT_STORE_MODE=embedded. Asserts
+// the page renders the embedded badge, DSN, and the migrate-to-esb
+// button. Without the badge the user cannot tell whether they are
+// running locally or against a server.
+func TestServer_StoragePageRenders(t *testing.T) {
+	dir := makeProjectRoot(t)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(
+		"EVENT_STORE_MODE=embedded\nEVENT_STORE_DSN=demo.db\n",
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(Options{ProjectRoot: dir})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/storage")
+	if err != nil {
+		t.Fatalf("GET /storage: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	for _, want := range []string{"Storage", "embedded", "demo.db", "Pindah ke Event Sourcing Builder"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %q", want, body[:min(200, len(body))])
+		}
+	}
+	if strings.Contains(body, "render error") {
+		t.Errorf("storage body contained render error: %q", body)
+	}
+}
+
+// TestServer_StorageFormPageRenders seeds an .env with ESB
+// targets and asserts GET /storage/migrate pre-fills them.
+func TestServer_StorageFormPageRenders(t *testing.T) {
+	dir := makeProjectRoot(t)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(`
+EVENT_STORE_MODE=embedded
+EVENT_STORE_DSN=demo.db
+ESB_URL=http://esb.internal:8080
+TENANT_ID=demo
+PROJECT_ID=toko
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(Options{ProjectRoot: dir})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/storage/migrate?direction=to-esb")
+	if err != nil {
+		t.Fatalf("GET /storage/migrate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	for _, want := range []string{"http://esb.internal:8080", "demo", "toko"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing prefill %q", want)
+		}
+	}
+}
+
+// TestServer_StorageFormRequiresDirection asserts the GET handler
+// rejects a request without the direction query param.
+func TestServer_StorageFormRequiresDirection(t *testing.T) {
+	srv := newTestServer(t, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/storage/migrate")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestServer_StorageFormRejectsBadURL covers the validator path:
+// an injected javascript: URL must not make it through BuildArgv.
+func TestServer_StorageFormRejectsBadURL(t *testing.T) {
+	runner := &fakeRunner{}
+	srv := newTestServer(t, runner)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("direction", "to-esb")
+	form.Set("esb_url", "javascript:alert(1)")
+	form.Set("tenant_id", "demo")
+	form.Set("project_id", "toko")
+	resp, err := postFormWithOrigin(ts.URL+"/storage/migrate?direction=to-esb", form, ts.URL)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	body, _ := readAll(resp.Body)
+	if !strings.Contains(body, "esb_url") {
+		t.Errorf("body missing esb_url mention: %q", body[:min(200, len(body))])
+	}
+}
+
+// TestServer_StorageFormHappyPath locks in the redirect to
+// /commands/runs/<id> when the form passes validation. The run
+// store then shows the recorded argv.
+func TestServer_StorageFormHappyPath(t *testing.T) {
+	runner := &fakeRunner{}
+	srv := newTestServer(t, runner)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("direction", "to-esb")
+	form.Set("esb_url", "http://esb.internal:8080")
+	form.Set("tenant_id", "demo")
+	form.Set("project_id", "toko")
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := postFormWithOriginClient(client, ts.URL+"/storage/migrate?direction=to-esb", form, ts.URL)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("status = %d, want 303", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/commands/runs/") {
+		t.Errorf("redirect = %q, want /commands/runs/...", loc)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if status, _, ok := srv.RunStore().StatusSnapshot(strings.TrimPrefix(loc, "/commands/runs/")); ok && status != RunRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner.calls = %d, want 1", len(runner.calls))
+	}
+	wantArgv := []string{"esb", "migrate", "to-esb", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
+	if !equalStrings(runner.calls[0].Argv, wantArgv) {
+		t.Errorf("argv = %v, want %v", runner.calls[0].Argv, wantArgv)
+	}
+}
+
+// TestBuildStoragePage_ModeRules verifies the migration eligibility
+// rules: embedded → to-esb is allowed, esb-server → to-embedded is
+// allowed, and a typo'd mode gets nothing.
+func TestBuildStoragePage_ModeRules(t *testing.T) {
+	cases := []struct {
+		name             string
+		mode             string
+		wantToESB        bool
+		wantToEmbedded   bool
+	}{
+		{"embedded", inspector.StorageModeEmbedded, true, false},
+		{"esb-server", inspector.StorageModeESBServer, false, true},
+		{"unknown", "garbage", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			page := buildStoragePage(inspector.ProjectModel{}, inspector.StorageInfo{Mode: tc.mode})
+			if page.CanMigrateToESB != tc.wantToESB {
+				t.Errorf("CanMigrateToESB = %v, want %v", page.CanMigrateToESB, tc.wantToESB)
+			}
+			if page.CanMigrateToEmbedded != tc.wantToEmbedded {
+				t.Errorf("CanMigrateToEmbedded = %v, want %v", page.CanMigrateToEmbedded, tc.wantToEmbedded)
+			}
+		})
 	}
 }
 

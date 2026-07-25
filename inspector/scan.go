@@ -31,6 +31,7 @@ type ProjectModel struct {
 	Wire        WireGraph
 	Migrate     []string // GORM models in projection/db.go AutoMigrate
 	RunWorker   []string // workers in main.go
+	Storage     StorageInfo // event store mode + per-aggregate event counts
 }
 
 // Aggregate is one file in domain/ (excluding event.go / errors.go).
@@ -130,6 +131,7 @@ func Scan(rootDir string) (ProjectModel, error) {
 	if err := scanMain(filepath.Join(rootDir, "main.go"), &m); err != nil {
 		return m, err
 	}
+	m.Storage = ScanStorage(rootDir)
 
 	return m, nil
 }

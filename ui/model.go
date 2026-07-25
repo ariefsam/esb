@@ -24,6 +24,8 @@ const (
 	PageAggregateDetail PageKind = "aggregate_detail"
 	PageCommands        PageKind = "commands"
 	PageRunDetail       PageKind = "run_detail"
+	PageStorage         PageKind = "storage"
+	PageMigrate         PageKind = "migrate"
 	PageError           PageKind = "error"
 )
 
@@ -173,4 +175,46 @@ type ErrorPage struct {
 	Message string
 	Back    string // href of the "back to overview" link
 	Code    int    // HTTP status to send alongside the page
+}
+
+// StorageAggregateRow is one row on the /storage aggregate table.
+type StorageAggregateRow struct {
+	Name  string
+	Count int
+}
+
+// StoragePage is the view-model for `GET /storage`. It surfaces
+// the active event-store mode, the resolved DSN/URL, and the
+// per-aggregate event counts so the user can decide whether to
+// trigger a migration.
+type StoragePage struct {
+	Kind         PageKind
+	Project      inspector.ProjectModel
+	Mode         string // "embedded" or "esb-server"
+	ModeLabel    string // human label for the badge
+	DSN          string // embedded SQLite path, absolute
+	ESBURL       string // remote URL when mode == esb-server
+	TotalEvents  int
+	HasSQLite    bool   // false when DSN is unset or file unreadable
+	Rows         []StorageAggregateRow
+	MigrationDirection  string // "to-esb", "to-embedded", or ""
+	MigrationCount      int
+	CanMigrateToESB     bool
+	CanMigrateToEmbedded bool
+}
+
+// MigrateFormPage renders the confirmation form for /storage/migrate.
+// Pre-fill ESB_URL/TENANT_ID/PROJECT_ID from the project's .env so the
+// user only needs to confirm — manual override is allowed.
+type MigrateFormPage struct {
+	Kind     PageKind
+	Project  inspector.ProjectModel
+	Mode     string
+	DSN      string
+	ESBURL   string
+	TenantID string
+	ProjectID string
+	EventsToMigrate int // events visible to be migrated
+	Direction       string // "to-esb" or "to-embedded" (query param)
+	Error    string // pre-fill error banner when a previous run was rejected
 }

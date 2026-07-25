@@ -7,6 +7,8 @@ import (
 )
 
 // EventStoreAdapter wraps the eventstore HTTP client to implement domain.EventRepository.
+// It is the remote-store adapter; the sibling LocalAdapter in repository/local_adapter.go
+// implements the same interface against an embedded SQLite store.
 type EventStoreAdapter struct {
 	client *eventstore.Client
 }

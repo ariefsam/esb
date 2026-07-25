@@ -116,6 +116,26 @@ var catalog = []CatalogEntry{
 		Preview: []string{"esb", "show"},
 		Build:   buildShow,
 	},
+	{
+		ID:          "migrate-to-esb",
+		Label:       "Migrate to ESB server",
+		Description: "Pindahkan event dari SQLite lokal ke server Event Sourcing Builder remote.",
+		Fields: []CommandField{
+			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
+			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
+			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
+		},
+		Preview: []string{"esb", "migrate", "to-esb", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"},
+		Build:   buildMigrateToESB,
+	},
+	{
+		ID:          "migrate-to-embedded",
+		Label:       "Migrate to embedded",
+		Description: "Rollback: pindahkan event dari server ESB remote ke SQLite lokal.",
+		Fields:      []CommandField{}, // no fields — uses local .env defaults
+		Preview:     []string{"esb", "migrate", "to-embedded", "--force"},
+		Build:       buildMigrateToEmbedded,
+	},
 }
 
 // findCommand returns the catalog entry for id, or nil if unknown.
@@ -272,6 +292,102 @@ func buildShow(form FormInput) ([]string, error) {
 		return []string{"esb", "show"}, nil
 	}
 	return []string{"esb", "show", agg}, nil
+}
+
+// validateFieldURL accepts http:// or https:// URLs with a host
+// and optional port/path. The character class is intentionally
+// restrictive — no query strings, no fragments, no userinfo —
+// because the value is passed to cobra as a positional argument
+// for `esb migrate --esb-url`. Defence in depth against an
+// attacker probing the local network via a crafted URL.
+func validateFieldURL(s string) error {
+	if s == "" {
+		return fmt.Errorf("empty value")
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == ':' || r == '/' || r == '.' || r == '-' || r == '_' || r == '+':
+		default:
+			return fmt.Errorf("invalid character %q in %q", string(r), s)
+		}
+	}
+	if !(strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")) {
+		return fmt.Errorf("URL harus mulai dengan http:// atau https://")
+	}
+	// After the scheme, require at least one character.
+	if len(s) <= len("http://") {
+		return fmt.Errorf("URL tidak punya host")
+	}
+	return nil
+}
+
+// validateFieldTenantProject enforces snake_case-or-hyphen on the
+// tenant + project IDs so they round-trip cleanly to ESB without
+// being parsed as flags or paths.
+func validateFieldTenantProject(s string) error {
+	if s == "" {
+		return fmt.Errorf("empty value")
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return fmt.Errorf("invalid character %q in %q", string(r), s)
+		}
+	}
+	return nil
+}
+
+// buildMigrateToESB constructs the argv for `esb migrate to-esb`.
+// All three required fields are validated: URL via validateFieldURL,
+// tenant/project via validateFieldTenantProject. Empty field
+// rejection is handled by the catalog (Required: true) before this
+// function runs.
+func buildMigrateToESB(form FormInput) ([]string, error) {
+	esbURL := onlyValue(form, "esb_url")
+	if err := validateFieldURL(esbURL); err != nil {
+		return nil, fmt.Errorf("esb_url: %w", err)
+	}
+	tenant := onlyValue(form, "tenant_id")
+	if err := validateFieldTenantProject(tenant); err != nil {
+		return nil, fmt.Errorf("tenant_id: %w", err)
+	}
+	project := onlyValue(form, "project_id")
+	if err := validateFieldTenantProject(project); err != nil {
+		return nil, fmt.Errorf("project_id: %w", err)
+	}
+	return []string{
+		"esb", "migrate", "to-esb",
+		"--esb-url", esbURL,
+		"--tenant", tenant,
+		"--project", project,
+	}, nil
+}
+
+// buildMigrateToEmbedded constructs the argv for `esb migrate
+// to-embedded`. It has no UI fields — the user clicked a
+// pre-confirmed button — but always passes --force so the operator
+// does not have to remember the flag.
+func buildMigrateToEmbedded(form FormInput) ([]string, error) {
+	// Defensive: ignore any form input. The form has no fields
+	// and catalogHasField rejects unknowns, but a future refactor
+	// could change that — keep the loop here so the function
+	// shape matches the rest of the catalog.
+	for k := range form {
+		if k == "force" || k == "direction" {
+			continue
+		}
+		return nil, fmt.Errorf("field %q tidak dikenal untuk command migrate-to-embedded", k)
+	}
+	return []string{
+		"esb", "migrate", "to-embedded", "--force",
+	}, nil
 }
 
 // onlyValue returns the first non-empty value for a key, or "" if none.

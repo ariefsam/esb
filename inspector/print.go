@@ -210,6 +210,7 @@ func printStorage(w io.Writer, m ProjectModel) {
 		fmt.Fprintf(w, "  Run workers: %s\n", strings.Join(m.RunWorker, ", "))
 	}
 	fmt.Fprintln(w, "  Event store: EventRepository -> repository.EventStoreAdapter -> eventstore.Client")
+	fmt.Fprintf(w, "  Storage mode: %s\n", m.Storage.String())
 	fmt.Fprintln(w)
 }
 

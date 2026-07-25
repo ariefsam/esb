@@ -1,0 +1,80 @@
+{{define "storage"}}
+<section class="hero">
+  <h1>Storage</h1>
+  <p class="muted">Mode event store, DSN, dan ringkasan event per aggregate.</p>
+</section>
+
+<section>
+  <h2>Mode</h2>
+  <dl class="kv">
+    <dt>Mode</dt>
+    <dd>
+      {{if eq .Mode "esb-server"}}
+        <span class="badge">{{.ModeLabel}}</span> — remote HTTP
+      {{else}}
+        <span class="badge">{{.ModeLabel}}</span> — lokal SQLite
+      {{end}}
+    </dd>
+    {{if .DSN}}
+    <dt>SQLite path</dt>
+    <dd><code>{{.DSN}}</code></dd>
+    {{end}}
+    {{if .ESBURL}}
+    <dt>ESB URL</dt>
+    <dd><code>{{.ESBURL}}</code></dd>
+    {{end}}
+    <dt>Total events</dt>
+    <dd>
+      {{if .HasSQLite}}
+        {{.TotalEvents}} event tersimpan
+      {{else}}
+        <span class="muted">(file belum ada atau tidak bisa dibuka)</span>
+      {{end}}
+    </dd>
+    {{if .MigrationDirection}}
+    <dt>Last migration</dt>
+    <dd>
+      <code>{{.MigrationDirection}}</code>
+      ({{.MigrationCount}} events)
+    </dd>
+    {{end}}
+  </dl>
+</section>
+
+<section>
+  <h2>Events per aggregate</h2>
+  {{if not .Rows}}
+  <p class="muted">Belum ada event tersimpan.</p>
+  {{else}}
+  <table>
+    <thead><tr><th>Aggregate</th><th>Events</th></tr></thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td>{{.Count}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+
+<section>
+  <h2>Pindah mode</h2>
+  {{if .CanMigrateToESB}}
+  <p>Project ini jalan di mode <strong>embedded</strong>. Untuk migrasi ke server ESB remote:</p>
+  <form method="POST" action="/storage/migrate?direction=to-esb" data-cmd="migrate">
+    <button type="submit">Pindah ke Event Sourcing Builder</button>
+  </form>
+  {{else if .CanMigrateToEmbedded}}
+  <p>Project ini jalan di mode <strong>esb-server</strong>. Untuk rollback ke SQLite lokal:</p>
+  <form method="POST" action="/storage/migrate?direction=to-embedded" data-cmd="migrate">
+    <button type="submit">Pindah ke Embedded</button>
+    <small class="muted">— butuh --force bila SQLite sudah berisi event.</small>
+  </form>
+  {{else}}
+  <p class="muted">Mode saat ini sudah <strong>{{.ModeLabel}}</strong>. Tidak ada migrasi yang tersedia dari UI.</p>
+  {{end}}
+</section>
+{{end}}

@@ -75,6 +75,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/", s.routeRoot)
 	mux.HandleFunc("/aggregates/", s.handleAggregate)
+	mux.HandleFunc("/storage", s.handleStorage)
+	mux.HandleFunc("/storage/migrate", s.handleMigrate)
 	mux.HandleFunc("/commands", s.handleCommands)
 	mux.HandleFunc("/commands/execute", s.handleExecute)
 	mux.HandleFunc("/commands/runs/", s.handleRun)
@@ -208,6 +210,7 @@ func defaultNav(active string) Nav {
 		Active: active,
 		Links: []NavLink{
 			{Href: "/", Text: "Overview", Key: "overview"},
+			{Href: "/storage", Text: "Storage", Key: "storage"},
 			{Href: "/commands", Text: "Commands", Key: "commands"},
 		},
 	}
@@ -248,6 +251,10 @@ func (s *Server) renderBody(page interface{}) string {
 		tmplName = "commands"
 	case RunPage:
 		tmplName = "run_detail"
+	case StoragePage:
+		tmplName = "storage"
+	case MigrateFormPage:
+		tmplName = "migrate"
 	case ErrorPage:
 		tmplName = "error"
 	default:
