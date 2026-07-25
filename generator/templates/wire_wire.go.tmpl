@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 
 	"{{.ModuleName}}/eventstore"
 	"{{.ModuleName}}/domain"
@@ -77,13 +78,12 @@ func NewApp() (*App, error) {
 	if env.EventStoreMode == "esb-server" {
 		esClient = eventstore.New(env.ESBURL, env.TenantID, env.ProjectID, env.JWTIssuer, mustLoadKey())
 	}
-	eventRepo := buildEventRepository(env, esClient)
-	_ = eventRepo
-
 	db, err := projection.NewProjectionDB(env.DBDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open projection db: %w", err)
 	}
+	eventRepo := buildEventRepository(env, esClient, db)
+	_ = eventRepo
 	_ = db
 
 	router := mux.NewRouter()
@@ -103,7 +103,7 @@ func NewApp() (*App, error) {
 // esb-server branch requires a non-empty ESB_URL so we fail-fast
 // at startup rather than letting handlers crash on a missing
 // remote store.
-func buildEventRepository(env *Env, client *eventstore.Client) domain.EventRepository {
+func buildEventRepository(env *Env, client *eventstore.Client, projectionDB *gorm.DB) domain.EventRepository {
 	switch env.EventStoreMode {
 	case "esb-server":
 		if env.ESBURL == "" {
@@ -114,9 +114,13 @@ func buildEventRepository(env *Env, client *eventstore.Client) domain.EventRepos
 		}
 		return repository.NewEventStoreAdapter(client)
 	case "embedded":
-		db, err := projection.NewProjectionDB(env.EventStoreDSN)
-		if err != nil {
-			panic(fmt.Sprintf("open embedded event store: %v", err))
+		db := projectionDB
+		if env.EventStoreDSN != env.DBDSN {
+			var err error
+			db, err = projection.NewProjectionDB(env.EventStoreDSN)
+			if err != nil {
+				panic(fmt.Sprintf("open embedded event store: %v", err))
+			}
 		}
 		if err := eventstore.MigrateLocalStore(db); err != nil {
 			panic(fmt.Sprintf("migrate embedded event store: %v", err))

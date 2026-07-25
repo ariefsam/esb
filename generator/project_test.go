@@ -73,3 +73,52 @@ func TestEmbeddedModeStartsWithoutPrivateKey(t *testing.T) {
 	}
 }
 
+func TestInitProject_LocalStoreRejectsWrongExpectedVersion(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "generated-app")
+	if err := InitProject("example.com/generated-app", dest); err != nil {
+		t.Fatal(err)
+	}
+	testSrc := `package eventstore
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestWrongExpectedVersion(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "events.db")), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	if err := MigrateLocalStore(db); err != nil { t.Fatal(err) }
+	store := NewLocalStore(db)
+	_, err = store.StoreAtomic(context.Background(), Event{AggregateName: "order", AggregateID: "a", EventName: "Placed"}, 10)
+	if !errors.Is(err, ErrConflict) { t.Fatalf("error = %v, want ErrConflict", err) }
+}
+`
+	if err := os.WriteFile(filepath.Join(dest, "eventstore", "local_store_test.go"), []byte(testSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "test", "./eventstore")
+	cmd.Dir = dest
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated local store accepted wrong expected version: %v\n%s", err, output)
+	}
+}
+
+func TestInitProject_WireReusesProjectionDBForDefaultEmbeddedStore(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "generated-app")
+	if err := InitProject("example.com/generated-app", dest); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dest, "wire", "wire.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "buildEventRepository(env, esClient, db)") {
+		t.Fatal("generated wiring does not pass the projection DB handle to the embedded store")
+	}
+}

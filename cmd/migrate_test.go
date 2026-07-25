@@ -88,8 +88,18 @@ func TestMigrate_RequiresESBFlags(t *testing.T) {
 		want string
 	}{
 		{"esb-url missing", func() error { migrateESBURL = ""; migrateTenant = "t"; migrateProject = "p"; return requireESBFlags() }, "--esb-url"},
-		{"tenant missing", func() error { migrateESBURL = "http://x"; migrateTenant = ""; migrateProject = "p"; return requireESBFlags() }, "--tenant"},
-		{"project missing", func() error { migrateESBURL = "http://x"; migrateTenant = "t"; migrateProject = ""; return requireESBFlags() }, "--project"},
+		{"tenant missing", func() error {
+			migrateESBURL = "http://x"
+			migrateTenant = ""
+			migrateProject = "p"
+			return requireESBFlags()
+		}, "--tenant"},
+		{"project missing", func() error {
+			migrateESBURL = "http://x"
+			migrateTenant = "t"
+			migrateProject = ""
+			return requireESBFlags()
+		}, "--project"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -168,7 +178,7 @@ func TestMigrate_InsertEventsIntoSQLite(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	// Re-insert the same batch — should be a no-op thanks to
-	// isUniqueConstraintError handling.
+	// ON CONFLICT DO NOTHING.
 	if err := insertEventsIntoSQLite(dsn, events); err != nil {
 		t.Fatalf("re-insert: %v", err)
 	}
@@ -208,6 +218,60 @@ func TestMigrate_InsertIsIdempotent(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("count after idempotent re-insert = %d, want 2", count)
+	}
+}
+
+func TestMigrate_PlanUploadResumesAfterMatchingRemotePrefix(t *testing.T) {
+	local := []eventstore.Event{
+		{AggregateName: "order", AggregateID: "a", EventName: "Placed", Version: 1, Data: json.RawMessage(`{"n":1}`)},
+		{AggregateName: "order", AggregateID: "a", EventName: "Paid", Version: 2, Data: json.RawMessage(`{"n":2}`)},
+	}
+	got, err := planEventsToUpload(local, []eventstore.Event{local[0]})
+	if err != nil {
+		t.Fatalf("planEventsToUpload: %v", err)
+	}
+	if len(got) != 1 || got[0].Version != 2 {
+		t.Fatalf("upload plan = %+v, want only version 2", got)
+	}
+}
+
+func TestMigrate_PlanUploadRejectsDivergentRemoteHistory(t *testing.T) {
+	local := []eventstore.Event{{AggregateName: "order", AggregateID: "a", EventName: "Placed", Version: 1, Data: json.RawMessage(`{"n":1}`)}}
+	remote := []eventstore.Event{{AggregateName: "order", AggregateID: "a", EventName: "Different", Version: 1, Data: json.RawMessage(`{"n":1}`)}}
+	if _, err := planEventsToUpload(local, remote); err == nil {
+		t.Fatal("expected divergent remote history to be rejected")
+	}
+}
+
+func TestMigrate_ReplaceEventsRollsBackWhenImportFails(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "events.db")
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		aggregate_name TEXT NOT NULL, aggregate_id TEXT NOT NULL,
+		event_name TEXT NOT NULL, version INTEGER NOT NULL CHECK(version = 1),
+		data BLOB, time_millis INTEGER NOT NULL DEFAULT 0,
+		correlation_id TEXT, causation_id TEXT, idempotency_key TEXT,
+		UNIQUE(aggregate_name, aggregate_id, version));
+		INSERT INTO events(aggregate_name, aggregate_id, event_name, version) VALUES ('old','a','Old',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	err = replaceEventsInSQLite(dsn, []eventstore.Event{{AggregateName: "new", AggregateID: "b", EventName: "New", Version: 2}})
+	if err == nil {
+		t.Fatal("expected replacement insert to fail")
+	}
+	events, readErr := readAllEventsFromSQLite(dsn)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(events) != 1 || events[0].AggregateName != "old" {
+		t.Fatalf("rollback lost original history: %+v", events)
 	}
 }
 

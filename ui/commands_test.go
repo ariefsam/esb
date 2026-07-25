@@ -159,7 +159,7 @@ func TestBuildArgv_MigrateToESB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildArgv: %v", err)
 	}
-	want := []string{"esb", "migrate", "to-esb", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
+	want := []string{"esb", "migrate", "to-esb", "--source", "app.db", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
 	if !equalStrings(got, want) {
 		t.Errorf("argv = %v, want %v", got, want)
 	}
@@ -209,6 +209,7 @@ func TestBuildArgv_MigrateToEmbedded(t *testing.T) {
 	}
 	want := []string{
 		"esb", "migrate", "to-embedded",
+		"--source", "app.db",
 		"--esb-url", "http://esb.internal:8080",
 		"--tenant", "demo",
 		"--project", "toko",
@@ -260,6 +261,10 @@ func TestValidateFieldURL(t *testing.T) {
 		{"ftp://server", false},
 		{"http://host space", false},
 		{"http://host?query=1", false},
+		{"http://.", false},
+		{"http://:8080", false},
+		{"http://...", false},
+		{"http://-bad.example", false},
 	}
 	for _, tc := range cases {
 		err := validateFieldURL(tc.in)
@@ -291,6 +296,7 @@ func TestMigrateToEmbedded_DeclaresFormFields(t *testing.T) {
 		t.Fatal("migrate-to-embedded catalog entry not found")
 	}
 	want := map[string]bool{
+		"source":     true,
 		"esb_url":    true,
 		"tenant_id":  true,
 		"project_id": true,
@@ -303,6 +309,22 @@ func TestMigrateToEmbedded_DeclaresFormFields(t *testing.T) {
 	for k := range want {
 		if !got[k] {
 			t.Errorf("migrate-to-embedded catalog missing field %q (have %v)", k, got)
+		}
+	}
+}
+
+func TestBuildMigrateCommandsPassExplicitSource(t *testing.T) {
+	form := FormInput{
+		"source": {"data/events.db"}, "esb_url": {"https://esb.example.com"},
+		"tenant_id": {"demo"}, "project_id": {"shop"},
+	}
+	for _, id := range []string{"migrate-to-esb", "migrate-to-embedded"} {
+		argv, err := BuildArgv(id, form)
+		if err != nil {
+			t.Fatalf("BuildArgv(%s): %v", id, err)
+		}
+		if !strings.Contains(strings.Join(argv, " "), "--source data/events.db") {
+			t.Fatalf("%s argv does not pass source: %v", id, argv)
 		}
 	}
 }

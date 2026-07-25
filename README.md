@@ -99,7 +99,9 @@ Setelah `init`, salin `.env.example` ke `.env`. Nilai default membuat aplikasi j
 # Mode event store: "embedded" (lokal, SQLite) atau "esb-server" (remote HTTP)
 # Default: embedded — tidak butuh server ESB hidup untuk develop lokal.
 EVENT_STORE_MODE=embedded
-# Opsional: lokasi SQLite untuk event store. Kalau kosong, pakai DB_DSN.
+# Opsional: lokasi SQLite khusus event store. Kalau kosong, event store
+# memakai DB_DSN dan berbagi satu koneksi GORM dengan projection DB.
+# Kalau diisi berbeda, event dan projection sengaja memakai file terpisah.
 EVENT_STORE_DSN=
 
 # Hanya dipakai saat EVENT_STORE_MODE=esb-server

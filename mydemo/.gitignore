@@ -1,7 +1,0 @@
-private.pem
-public.pem
-*.db
-*.db-shm
-*.db-wal
-.env
-bin/

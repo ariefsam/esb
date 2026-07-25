@@ -852,7 +852,7 @@ func TestServer_StorageFormHappyPath(t *testing.T) {
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner.calls = %d, want 1", len(runner.calls))
 	}
-	wantArgv := []string{"esb", "migrate", "to-esb", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
+	wantArgv := []string{"esb", "migrate", "to-esb", "--source", "app.db", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
 	if !equalStrings(runner.calls[0].Argv, wantArgv) {
 		t.Errorf("argv = %v, want %v", runner.calls[0].Argv, wantArgv)
 	}
@@ -863,10 +863,10 @@ func TestServer_StorageFormHappyPath(t *testing.T) {
 // allowed, and a typo'd mode gets nothing.
 func TestBuildStoragePage_ModeRules(t *testing.T) {
 	cases := []struct {
-		name             string
-		mode             string
-		wantToESB        bool
-		wantToEmbedded   bool
+		name           string
+		mode           string
+		wantToESB      bool
+		wantToEmbedded bool
 	}{
 		{"embedded", inspector.StorageModeEmbedded, true, false},
 		{"esb-server", inspector.StorageModeESBServer, false, true},

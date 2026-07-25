@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
@@ -70,8 +72,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 // migrateToESB copies events from the embedded SQLite store to a
 // remote ESB server. Events are read in id ASC order so the
 // destination receives the same chronological order as the source.
-// Each batch uses version-1 as expected_version so re-running
-// against a partially migrated server does not duplicate events.
+// Before uploading, the remote history is compared with the local
+// history. Matching events are skipped and only the missing suffix is
+// appended; any divergent or remote-only history aborts the migration.
 func migrateToESB(cmd *cobra.Command) error {
 	sourceDSN, err := resolveSourceDSN()
 	if err != nil {
@@ -94,6 +97,18 @@ func migrateToESB(cmd *cobra.Command) error {
 	client, err := newESBClientForMigration()
 	if err != nil {
 		return err
+	}
+	remoteEvents, err := fetchAllRemoteEvents(cmd.Context(), client)
+	if err != nil {
+		return fmt.Errorf("inspect remote events: %w", err)
+	}
+	events, err = planEventsToUpload(events, remoteEvents)
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		fmt.Println("nothing to upload — remote history sudah sama")
+		return nil
 	}
 	batches := chunkEvents(events, 100)
 	for i, batch := range batches {
@@ -160,38 +175,25 @@ func migrateToEmbedded(cmd *cobra.Command) error {
 	if existing > 0 && !migrateForce {
 		return fmt.Errorf("target SQLite sudah punya %d event — pakai --force untuk overwrite", existing)
 	}
-	if existing > 0 && migrateForce {
-		if err := truncateEvents(sourceDSN); err != nil {
-			return fmt.Errorf("--force: truncate target: %w", err)
-		}
-		fmt.Printf("--force: cleared %d existing events from target\n", existing)
-	}
-
 	client, err := newESBClientForMigration()
 	if err != nil {
 		return err
 	}
 
-	const pageSize = 100
-	imported := 0
-	var afterID uint
-	for {
-		batch, err := client.EventsAll(cmd.Context(), nil, afterID, pageSize)
-		if err != nil {
-			return fmt.Errorf("fetch events: %w", err)
-		}
-		if len(batch) == 0 {
-			break
-		}
-		if err := insertEventsIntoSQLite(sourceDSN, batch); err != nil {
-			return fmt.Errorf("insert batch: %w", err)
-		}
-		imported += len(batch)
-		afterID = batch[len(batch)-1].ID
-		fmt.Printf("imported batch of %d (after id %d)\n", len(batch), afterID)
+	remoteEvents, err := fetchAllRemoteEvents(cmd.Context(), client)
+	if err != nil {
+		return fmt.Errorf("fetch events: %w", err)
 	}
-	fmt.Printf("imported %d events from ESB server\n", imported)
-	if err := writeMigrationState(sourceDSN, "to-embedded", imported); err != nil {
+	if existing > 0 && migrateForce {
+		if err := replaceEventsInSQLite(sourceDSN, remoteEvents); err != nil {
+			return fmt.Errorf("--force: replace target: %w", err)
+		}
+		fmt.Printf("--force: replaced %d existing events with %d remote events\n", existing, len(remoteEvents))
+	} else if err := insertEventsIntoSQLite(sourceDSN, remoteEvents); err != nil {
+		return fmt.Errorf("insert events: %w", err)
+	}
+	fmt.Printf("imported %d events from ESB server\n", len(remoteEvents))
+	if err := writeMigrationState(sourceDSN, "to-embedded", len(remoteEvents)); err != nil {
 		return fmt.Errorf("commit migration state: %w", err)
 	}
 	return nil
@@ -322,11 +324,11 @@ func readAllEventsFromSQLite(dsn string) ([]eventstore.Event, error) {
 	var out []eventstore.Event
 	for rows.Next() {
 		var (
-			id            uint
-			aggName, aggID, evtName string
-			version       int64
-			data          []byte
-			timeMillis    int64
+			id                       uint
+			aggName, aggID, evtName  string
+			version                  int64
+			data                     []byte
+			timeMillis               int64
 			corrID, causeID, idemKey sql.NullString
 		)
 		if err := rows.Scan(&id, &aggName, &aggID, &evtName, &version, &data, &timeMillis, &corrID, &causeID, &idemKey); err != nil {
@@ -371,8 +373,7 @@ func countEventsInSQLite(dsn string) (int, error) {
 // insertEventsIntoSQLite writes a batch to the embedded SQLite.
 // The INSERT uses ON CONFLICT DO NOTHING on the unique
 // (aggregate_name, aggregate_id, version) index so a partial-import
-// resume skips already-imported rows instead of failing. Callers
-// that need true overwrite must call truncateEvents() first.
+// resume skips already-imported rows instead of failing.
 func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -384,11 +385,18 @@ func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 	if err != nil {
 		return err
 	}
+	if err := insertEventsTx(tx, events); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertEventsTx(tx *sql.Tx, events []eventstore.Event) error {
 	stmt, err := tx.Prepare(`INSERT INTO events (aggregate_name, aggregate_id, event_name, version, data, time_millis, correlation_id, causation_id, idempotency_key)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(aggregate_name, aggregate_id, version) DO NOTHING`)
 	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
@@ -398,11 +406,84 @@ func insertEventsIntoSQLite(dsn string, events []eventstore.Event) error {
 			e.AggregateName, e.AggregateID, e.EventName, e.Version,
 			[]byte(e.Data), e.TimeMillis, e.CorrelationID, e.CausationID, e.IdempotencyKey,
 		); err != nil {
-			_ = tx.Rollback()
 			return err
 		}
 	}
+	return nil
+}
+
+// replaceEventsInSQLite replaces the target history atomically. The
+// original rows remain intact if any replacement insert fails.
+func replaceEventsInSQLite(dsn string, events []eventstore.Event) error {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM events`); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := insertEventsTx(tx, events); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	return tx.Commit()
+}
+
+func fetchAllRemoteEvents(ctx context.Context, client *eventstore.Client) ([]eventstore.Event, error) {
+	const pageSize = 100
+	var events []eventstore.Event
+	var afterID uint
+	for {
+		batch, err := client.EventsAll(ctx, nil, afterID, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			return events, nil
+		}
+		events = append(events, batch...)
+		afterID = batch[len(batch)-1].ID
+	}
+}
+
+func planEventsToUpload(local, remote []eventstore.Event) ([]eventstore.Event, error) {
+	localByStream := make(map[string]map[int64]eventstore.Event)
+	for _, e := range local {
+		key := e.AggregateName + "\x00" + e.AggregateID
+		if localByStream[key] == nil {
+			localByStream[key] = make(map[int64]eventstore.Event)
+		}
+		localByStream[key][e.Version] = e
+	}
+	remoteVersions := make(map[string]int64)
+	for _, e := range remote {
+		key := e.AggregateName + "\x00" + e.AggregateID
+		candidate, ok := localByStream[key][e.Version]
+		if !ok || candidate.EventName != e.EventName || !jsonEqual(candidate.Data, e.Data) {
+			return nil, fmt.Errorf("remote history diverges at %s/%s v%d", e.AggregateName, e.AggregateID, e.Version)
+		}
+		if e.Version > remoteVersions[key] {
+			remoteVersions[key] = e.Version
+		}
+	}
+	pending := make([]eventstore.Event, 0, len(local))
+	for _, e := range local {
+		key := e.AggregateName + "\x00" + e.AggregateID
+		if e.Version > remoteVersions[key] {
+			pending = append(pending, e)
+		}
+	}
+	return pending, nil
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(a), bytes.TrimSpace(b))
 }
 
 // chunkEvents splits events into batches of size n. The last chunk

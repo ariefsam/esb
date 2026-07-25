@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +122,7 @@ var catalog = []CatalogEntry{
 		Label:       "Migrate to ESB server",
 		Description: "Pindahkan event dari SQLite lokal ke server Event Sourcing Builder remote.",
 		Fields: []CommandField{
+			{Name: "source", Label: "SQLite path", Placeholder: "app.db", Type: "text", Help: "Defaults to app.db relative to the selected project root"},
 			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
 			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
 			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
@@ -137,6 +139,7 @@ var catalog = []CatalogEntry{
 			// validator can reject unknown keys uniformly; the
 			// operator pre-fills from .env and the handler
 			// passes them through to `esb migrate to-embedded`.
+			{Name: "source", Label: "SQLite path", Placeholder: "app.db", Type: "text", Help: "Defaults to app.db relative to the selected project root"},
 			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
 			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
 			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
@@ -303,32 +306,41 @@ func buildShow(form FormInput) ([]string, error) {
 	return []string{"esb", "show", agg}, nil
 }
 
-// validateFieldURL accepts http:// or https:// URLs with a host
-// and optional port/path. The character class is intentionally
-// restrictive — no query strings, no fragments, no userinfo —
-// because the value is passed to cobra as a positional argument
-// for `esb migrate --esb-url`. Defence in depth against an
-// attacker probing the local network via a crafted URL.
+// validateFieldURL accepts a parsed http(s) URL with a valid hostname
+// and optional port/path. Query strings, fragments, and userinfo are
+// rejected because migration endpoints are configured as base URLs.
 func validateFieldURL(s string) error {
 	if s == "" {
 		return fmt.Errorf("empty value")
 	}
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == ':' || r == '/' || r == '.' || r == '-' || r == '_' || r == '+':
-		default:
-			return fmt.Errorf("invalid character %q in %q", string(r), s)
-		}
+	u, err := url.ParseRequestURI(s)
+	if err != nil {
+		return fmt.Errorf("URL tidak valid: %w", err)
 	}
-	if !(strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")) {
+	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("URL harus mulai dengan http:// atau https://")
 	}
-	// After the scheme, require at least one character.
-	if len(s) <= len("http://") {
-		return fmt.Errorf("URL tidak punya host")
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("URL tidak boleh punya userinfo, query, atau fragment")
+	}
+	host := u.Hostname()
+	if host == "" || host == "." || strings.Trim(host, ".") == "" {
+		return fmt.Errorf("URL tidak punya host yang valid")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return fmt.Errorf("URL tidak punya host yang valid")
+		}
+	}
+	return nil
+}
+
+func validateSourcePath(s string) error {
+	if s == "" {
+		return nil
+	}
+	if filepath.IsAbs(s) || filepath.Clean(s) == ".." || strings.HasPrefix(filepath.Clean(s), ".."+string(filepath.Separator)) {
+		return fmt.Errorf("source must stay inside the selected project")
 	}
 	return nil
 }
@@ -359,6 +371,13 @@ func validateFieldTenantProject(s string) error {
 // rejection is handled by the catalog (Required: true) before this
 // function runs.
 func buildMigrateToESB(form FormInput) ([]string, error) {
+	source := onlyValue(form, "source")
+	if err := validateSourcePath(source); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	if source == "" {
+		source = "app.db"
+	}
 	esbURL := onlyValue(form, "esb_url")
 	if err := validateFieldURL(esbURL); err != nil {
 		return nil, fmt.Errorf("esb_url: %w", err)
@@ -373,6 +392,7 @@ func buildMigrateToESB(form FormInput) ([]string, error) {
 	}
 	return []string{
 		"esb", "migrate", "to-esb",
+		"--source", source,
 		"--esb-url", esbURL,
 		"--tenant", tenant,
 		"--project", project,
@@ -385,6 +405,13 @@ func buildMigrateToESB(form FormInput) ([]string, error) {
 // remote target without editing .env. The optional force checkbox
 // maps to the --force CLI flag.
 func buildMigrateToEmbedded(form FormInput) ([]string, error) {
+	source := onlyValue(form, "source")
+	if err := validateSourcePath(source); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	if source == "" {
+		source = "app.db"
+	}
 	esbURL := onlyValue(form, "esb_url")
 	if err := validateFieldURL(esbURL); err != nil {
 		return nil, fmt.Errorf("esb_url: %w", err)
@@ -399,6 +426,7 @@ func buildMigrateToEmbedded(form FormInput) ([]string, error) {
 	}
 	argv := []string{
 		"esb", "migrate", "to-embedded",
+		"--source", source,
 		"--esb-url", esbURL,
 		"--tenant", tenant,
 		"--project", project,

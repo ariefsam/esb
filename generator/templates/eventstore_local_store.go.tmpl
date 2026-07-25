@@ -85,18 +85,33 @@ func (s *LocalStore) StoreAtomic(ctx context.Context, e Event, expectedVersion i
 		row.TimeMillis = time.Now().UnixMilli()
 	}
 
-	// Translate optimistic-lock collision into ErrConflict so
-	// handlers can react without parsing gorm error strings.
-	err := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		Create(&row).Error
+	// Enforce optimistic concurrency inside one transaction. The
+	// aggregate row with the highest version must exactly match the
+	// caller's expectedVersion before a new version is inserted.
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current int64
+		if err := tx.Model(&EventRow{}).
+			Where("aggregate_name = ? AND aggregate_id = ?", e.AggregateName, e.AggregateID).
+			Select("COALESCE(MAX(version), 0)").Scan(&current).Error; err != nil {
+			return err
+		}
+		if current != expectedVersion {
+			return ErrConflict
+		}
+		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+		if result.Error != nil {
+			return result.Error
+		}
+		if row.ID == 0 {
+			return ErrConflict
+		}
+		return nil
+	})
+	if errors.Is(err, ErrConflict) {
+		return Event{}, ErrConflict
+	}
 	if err != nil {
 		return Event{}, fmt.Errorf("insert event: %w", err)
-	}
-	if row.ID == 0 {
-		// OnConflict.DoNothing leaves ID at zero when the row
-		// already existed — that is a duplicate version collision.
-		return Event{}, ErrConflict
 	}
 	return Event{
 		ID:             row.ID,
