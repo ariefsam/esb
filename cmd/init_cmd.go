@@ -98,9 +98,10 @@ Examples:
 Done! Next steps:
 
 %s  cp .env.example .env
-  # edit .env — set ESB_URL, TENANT_ID, PROJECT_ID, JWT_ISSUER
-  make keygen
-  # paste the printed PUBLIC_KEY into the ESB server's PUBLIC_KEYS env var
+  # Default mode is "embedded" — app jalan tanpa server ESB hidup.
+  # Untuk pindah ke remote nanti: edit .env (EVENT_STORE_MODE=esb-server,
+  # set ESB_URL/TENANT_ID/PROJECT_ID) lalu 'make migrate-to-esb'.
+  make keygen   # kalau mau pakai mode esb-server
 
   esb add aggregate <name>
 `, cdStep)

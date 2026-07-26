@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +116,37 @@ var catalog = []CatalogEntry{
 		},
 		Preview: []string{"esb", "show"},
 		Build:   buildShow,
+	},
+	{
+		ID:          "migrate-to-esb",
+		Label:       "Migrate to ESB server",
+		Description: "Pindahkan event dari SQLite lokal ke server Event Sourcing Builder remote.",
+		Fields: []CommandField{
+			{Name: "source", Label: "SQLite path", Placeholder: "app.db", Type: "text", Help: "Defaults to app.db relative to the selected project root"},
+			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
+			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
+			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
+		},
+		Preview: []string{"esb", "migrate", "to-esb", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"},
+		Build:   buildMigrateToESB,
+	},
+	{
+		ID:          "migrate-to-embedded",
+		Label:       "Migrate to embedded",
+		Description: "Rollback: pindahkan event dari server ESB remote ke SQLite lokal.",
+		Fields: []CommandField{
+			// Same fields as the to-esb form so the same-origin
+			// validator can reject unknown keys uniformly; the
+			// operator pre-fills from .env and the handler
+			// passes them through to `esb migrate to-embedded`.
+			{Name: "source", Label: "SQLite path", Placeholder: "app.db", Type: "text", Help: "Defaults to app.db relative to the selected project root"},
+			{Name: "esb_url", Label: "ESB URL", Placeholder: "http://esb.internal:8080", Required: true, Type: "text", Help: "http(s)://host:port"},
+			{Name: "tenant_id", Label: "Tenant ID", Placeholder: "demo", Required: true, Type: "text"},
+			{Name: "project_id", Label: "Project ID", Placeholder: "toko", Required: true, Type: "text"},
+			{Name: "force", Label: "Force overwrite", Type: "checkbox", Help: "Wajib dicentang bila SQLite sudah berisi event."},
+		},
+		Preview: []string{"esb", "migrate", "to-embedded", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko", "--force"},
+		Build:   buildMigrateToEmbedded,
 	},
 }
 
@@ -272,6 +304,137 @@ func buildShow(form FormInput) ([]string, error) {
 		return []string{"esb", "show"}, nil
 	}
 	return []string{"esb", "show", agg}, nil
+}
+
+// validateFieldURL accepts a parsed http(s) URL with a valid hostname
+// and optional port/path. Query strings, fragments, and userinfo are
+// rejected because migration endpoints are configured as base URLs.
+func validateFieldURL(s string) error {
+	if s == "" {
+		return fmt.Errorf("empty value")
+	}
+	u, err := url.ParseRequestURI(s)
+	if err != nil {
+		return fmt.Errorf("URL tidak valid: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL harus mulai dengan http:// atau https://")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("URL tidak boleh punya userinfo, query, atau fragment")
+	}
+	host := u.Hostname()
+	if host == "" || host == "." || strings.Trim(host, ".") == "" {
+		return fmt.Errorf("URL tidak punya host yang valid")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return fmt.Errorf("URL tidak punya host yang valid")
+		}
+	}
+	return nil
+}
+
+func validateSourcePath(s string) error {
+	if s == "" {
+		return nil
+	}
+	if filepath.IsAbs(s) || filepath.Clean(s) == ".." || strings.HasPrefix(filepath.Clean(s), ".."+string(filepath.Separator)) {
+		return fmt.Errorf("source must stay inside the selected project")
+	}
+	return nil
+}
+
+// validateFieldTenantProject enforces snake_case-or-hyphen on the
+// tenant + project IDs so they round-trip cleanly to ESB without
+// being parsed as flags or paths.
+func validateFieldTenantProject(s string) error {
+	if s == "" {
+		return fmt.Errorf("empty value")
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return fmt.Errorf("invalid character %q in %q", string(r), s)
+		}
+	}
+	return nil
+}
+
+// buildMigrateToESB constructs the argv for `esb migrate to-esb`.
+// All three required fields are validated: URL via validateFieldURL,
+// tenant/project via validateFieldTenantProject. Empty field
+// rejection is handled by the catalog (Required: true) before this
+// function runs.
+func buildMigrateToESB(form FormInput) ([]string, error) {
+	source := onlyValue(form, "source")
+	if err := validateSourcePath(source); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	if source == "" {
+		source = "app.db"
+	}
+	esbURL := onlyValue(form, "esb_url")
+	if err := validateFieldURL(esbURL); err != nil {
+		return nil, fmt.Errorf("esb_url: %w", err)
+	}
+	tenant := onlyValue(form, "tenant_id")
+	if err := validateFieldTenantProject(tenant); err != nil {
+		return nil, fmt.Errorf("tenant_id: %w", err)
+	}
+	project := onlyValue(form, "project_id")
+	if err := validateFieldTenantProject(project); err != nil {
+		return nil, fmt.Errorf("project_id: %w", err)
+	}
+	return []string{
+		"esb", "migrate", "to-esb",
+		"--source", source,
+		"--esb-url", esbURL,
+		"--tenant", tenant,
+		"--project", project,
+	}, nil
+}
+
+// buildMigrateToEmbedded constructs the argv for `esb migrate
+// to-embedded`. The form requires esb_url / tenant_id / project_id
+// (same as the to-esb direction) so the operator can confirm the
+// remote target without editing .env. The optional force checkbox
+// maps to the --force CLI flag.
+func buildMigrateToEmbedded(form FormInput) ([]string, error) {
+	source := onlyValue(form, "source")
+	if err := validateSourcePath(source); err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	if source == "" {
+		source = "app.db"
+	}
+	esbURL := onlyValue(form, "esb_url")
+	if err := validateFieldURL(esbURL); err != nil {
+		return nil, fmt.Errorf("esb_url: %w", err)
+	}
+	tenant := onlyValue(form, "tenant_id")
+	if err := validateFieldTenantProject(tenant); err != nil {
+		return nil, fmt.Errorf("tenant_id: %w", err)
+	}
+	project := onlyValue(form, "project_id")
+	if err := validateFieldTenantProject(project); err != nil {
+		return nil, fmt.Errorf("project_id: %w", err)
+	}
+	argv := []string{
+		"esb", "migrate", "to-embedded",
+		"--source", source,
+		"--esb-url", esbURL,
+		"--tenant", tenant,
+		"--project", project,
+	}
+	if onlyValue(form, "force") == "true" {
+		argv = append(argv, "--force")
+	}
+	return argv, nil
 }
 
 // onlyValue returns the first non-empty value for a key, or "" if none.

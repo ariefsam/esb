@@ -22,20 +22,35 @@ esb init toko-online
 
 cd toko-online
 
-# 2. Tambah aggregate
+# 2. Salin .env.example ke .env — default mode adalah "embedded" (lokal),
+#    jadi kamu bisa langsung jalan tanpa setup server ESB.
+cp .env.example .env
+
+# 3. Tambah aggregate
 esb add aggregate order
 
-# 3. Tambah event ke aggregate
+# 4. Tambah event ke aggregate
 esb add event order OrderPlaced amount:int64 currency:string buyer_id:string
 esb add event order OrderCancelled reason:string
 
-# 4. Tambah HTTP handler
+# 5. Tambah HTTP handler
 esb add handler place_order --aggregate order
 
-# 5. Generate wire dan jalankan
+# 6. Generate wire dan jalankan (mode embedded, tidak butuh server ESB)
 make wire
 make run
 ```
+
+Saat server jalan kamu bisa eksplor lewat UI dashboard:
+
+```bash
+# Terminal lain
+esb ui
+# buka http://127.0.0.1:8787 — halaman /storage menampilkan mode aktif
+# dan event tersimpan
+```
+
+Untuk migrasi ke server ESB remote (production), lihat [Migrasi ke ESB Server](#migrasi-ke-esb-server).
 
 ---
 
@@ -63,9 +78,11 @@ toko-online/
 │   ├── event.go
 │   └── errors.go
 ├── eventstore/
-│   └── client.go
+│   ├── client.go        # HTTP client (dipakai saat mode esb-server)
+│   └── local_store.go   # SQLite-backed EventRepository (dipakai saat mode embedded)
 ├── repository/
-│   └── eventstore_adapter.go
+│   ├── eventstore_adapter.go  # adapter untuk HTTP client
+│   └── local_adapter.go       # adapter untuk local_store (mode embedded)
 ├── projection/
 │   ├── db.go
 │   └── query.go
@@ -76,9 +93,18 @@ toko-online/
     └── providers.go
 ```
 
-Setelah `init`, salin `.env.example` ke `.env` dan isi nilai berikut:
+Setelah `init`, salin `.env.example` ke `.env`. Nilai default membuat aplikasi jalan dalam **mode embedded** (SQLite lokal, tanpa server ESB):
 
 ```env
+# Mode event store: "embedded" (lokal, SQLite) atau "esb-server" (remote HTTP)
+# Default: embedded — tidak butuh server ESB hidup untuk develop lokal.
+EVENT_STORE_MODE=embedded
+# Opsional: lokasi SQLite khusus event store. Kalau kosong, event store
+# memakai DB_DSN dan berbagi satu koneksi GORM dengan projection DB.
+# Kalau diisi berbeda, event dan projection sengaja memakai file terpisah.
+EVENT_STORE_DSN=
+
+# Hanya dipakai saat EVENT_STORE_MODE=esb-server
 ESB_URL=http://localhost:8080
 TENANT_ID=my-tenant
 PROJECT_ID=toko-online
@@ -87,7 +113,7 @@ DB_DSN=toko-online.db
 ADDR=:9000
 ```
 
-Generate ECDSA key pair untuk autentikasi ke ESB server:
+Saat `EVENT_STORE_MODE=esb-server` kamu juga butuh ECDSA key pair untuk JWT signing:
 
 ```bash
 make keygen

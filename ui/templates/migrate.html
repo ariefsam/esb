@@ -1,0 +1,54 @@
+{{define "migrate"}}
+<section class="hero">
+  <h1>Pindah ke {{if eq .Direction "to-esb"}}Event Sourcing Builder{{else}}Embedded (SQLite lokal){{end}}</h1>
+  <p class="muted">Konfirmasi target migrasi lalu klik Submit untuk menjalankan command.</p>
+</section>
+
+{{if .Error}}
+<div class="flash error">{{.Error}}</div>
+{{end}}
+
+<section>
+  <h2>Ringkasan</h2>
+  <dl class="kv">
+    <dt>Direction</dt><dd><code>{{.Direction}}</code></dd>
+    <dt>Source SQLite</dt><dd><code>{{.DSN}}</code></dd>
+    {{if .EventsToMigrate}}
+    <dt>Event untuk dimigrasi</dt><dd>{{.EventsToMigrate}}</dd>
+    {{end}}
+  </dl>
+</section>
+
+<section>
+  <h2>Target</h2>
+  <form method="POST" action="/storage/migrate?direction={{.Direction}}" data-cmd="migrate-to-{{if eq .Direction "to-esb"}}esb{{else}}embedded{{end}}">
+    <input type="hidden" name="direction" value="{{.Direction}}">
+    <div class="grid">
+      <label>
+        <span>ESB URL *</span>
+        <input type="text" name="esb_url" value="{{.ESBURL}}" placeholder="http://esb.internal:8080" required>
+        <small class="muted">http(s)://host:port — pakai https di production</small>
+      </label>
+      <label>
+        <span>Tenant ID *</span>
+        <input type="text" name="tenant_id" value="{{.TenantID}}" placeholder="demo" required>
+      </label>
+      <label>
+        <span>Project ID *</span>
+        <input type="text" name="project_id" value="{{.ProjectID}}" placeholder="toko" required>
+      </label>
+      {{if eq .Direction "to-embedded"}}
+      <label>
+        <span>Force overwrite</span>
+        <input type="checkbox" name="force" value="true">
+        <small class="muted">Wajib dicentang bila SQLite sudah berisi event.</small>
+      </label>
+      {{end}}
+    </div>
+    <div class="form-actions">
+      <button type="submit">Run migration</button>
+      <a class="btn small" href="/storage">&larr; back to storage</a>
+    </div>
+  </form>
+</section>
+{{end}}

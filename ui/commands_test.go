@@ -147,6 +147,188 @@ func TestBuildArgv_RejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+// TestBuildArgv_MigrateToESB pins the argv shape produced by the
+// new catalog entry — the storage page POST handler depends on
+// this exact layout.
+func TestBuildArgv_MigrateToESB(t *testing.T) {
+	got, err := BuildArgv("migrate-to-esb", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	})
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	want := []string{"esb", "migrate", "to-esb", "--source", "app.db", "--esb-url", "http://esb.internal:8080", "--tenant", "demo", "--project", "toko"}
+	if !equalStrings(got, want) {
+		t.Errorf("argv = %v, want %v", got, want)
+	}
+}
+
+// TestBuildArgv_MigrateToESBRejectsJSURL guards the URL validator
+// against javascript:/file:// schemes — the value flows to a
+// cobra positional argument, so a malicious payload could escape
+// into another arg if validation is sloppy.
+func TestBuildArgv_MigrateToESBRejectsJSURL(t *testing.T) {
+	_, err := BuildArgv("migrate-to-esb", FormInput{
+		"esb_url":    {"javascript:alert(1)"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	})
+	if err == nil {
+		t.Fatal("expected javascript: URL to be rejected")
+	}
+}
+
+// TestBuildArgv_MigrateToESBRejectsMissingTenant exercises the
+// required-field path: an empty tenant_id must fail BuildArgv
+// before the runner is ever invoked.
+func TestBuildArgv_MigrateToESBRejectsMissingTenant(t *testing.T) {
+	_, err := BuildArgv("migrate-to-esb", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {""},
+		"project_id": {"toko"},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing tenant_id")
+	}
+}
+
+// TestBuildArgv_MigrateToEmbedded exercises the rollback path:
+// the form must accept esb_url/tenant_id/project_id and emit the
+// matching CLI flags. The optional force checkbox maps to --force.
+func TestBuildArgv_MigrateToEmbedded(t *testing.T) {
+	got, err := BuildArgv("migrate-to-embedded", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+		"force":      {"true"},
+	})
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	want := []string{
+		"esb", "migrate", "to-embedded",
+		"--source", "app.db",
+		"--esb-url", "http://esb.internal:8080",
+		"--tenant", "demo",
+		"--project", "toko",
+		"--force",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("argv = %v, want %v", got, want)
+	}
+
+	// Force checkbox unchecked → no --force flag.
+	got, err = BuildArgv("migrate-to-embedded", FormInput{
+		"esb_url":    {"http://esb.internal:8080"},
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	})
+	if err != nil {
+		t.Fatalf("BuildArgv (no force): %v", err)
+	}
+	for _, a := range got {
+		if a == "--force" {
+			t.Errorf("argv unexpectedly contains --force when checkbox unchecked: %v", got)
+		}
+	}
+
+	// Missing required field must fail validation.
+	if _, err := BuildArgv("migrate-to-embedded", FormInput{
+		"tenant_id":  {"demo"},
+		"project_id": {"toko"},
+	}); err == nil {
+		t.Error("expected error when esb_url missing")
+	}
+}
+
+// TestValidateFieldURL exercises the URL validator directly so the
+// rules are locked in: scheme, host presence, character class.
+func TestValidateFieldURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"http://localhost:8080", true},
+		{"https://esb.internal", true},
+		{"https://esb.internal/path/with/slashes", true},
+		{"https://192.168.1.1:9000/api", true},
+		{"", false},
+		{"javascript:alert(1)", false},
+		{"file:///etc/passwd", false},
+		{"http://", false},
+		{"ftp://server", false},
+		{"http://host space", false},
+		{"http://host?query=1", false},
+		{"http://.", false},
+		{"http://:8080", false},
+		{"http://...", false},
+		{"http://-bad.example", false},
+	}
+	for _, tc := range cases {
+		err := validateFieldURL(tc.in)
+		if (err == nil) != tc.want {
+			t.Errorf("validateFieldURL(%q) error=%v, want valid=%v", tc.in, err, tc.want)
+		}
+	}
+}
+
+// TestFindCommand_MigrateEntries pins that both new catalog IDs
+// are reachable from findCommand — guards against a typo in the
+// catalog accidentally hiding the page link.
+func TestFindCommand_MigrateEntries(t *testing.T) {
+	for _, id := range []string{"migrate-to-esb", "migrate-to-embedded"} {
+		if findCommand(id) == nil {
+			t.Errorf("findCommand(%q) returned nil", id)
+		}
+	}
+}
+
+// TestMigrateToEmbedded_DeclaresFormFields locks in the field set
+// that ui/templates/migrate.html submits for the to-embedded
+// direction. If a future refactor empties the catalog entry the
+// handleMigrateSubmit handler will reject every form submission
+// with "field tidak dikenal" — exactly the regression we hit before.
+func TestMigrateToEmbedded_DeclaresFormFields(t *testing.T) {
+	cmd := findCommand("migrate-to-embedded")
+	if cmd == nil {
+		t.Fatal("migrate-to-embedded catalog entry not found")
+	}
+	want := map[string]bool{
+		"source":     true,
+		"esb_url":    true,
+		"tenant_id":  true,
+		"project_id": true,
+		"force":      true,
+	}
+	got := map[string]bool{}
+	for _, f := range cmd.Fields {
+		got[f.Name] = true
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("migrate-to-embedded catalog missing field %q (have %v)", k, got)
+		}
+	}
+}
+
+func TestBuildMigrateCommandsPassExplicitSource(t *testing.T) {
+	form := FormInput{
+		"source": {"data/events.db"}, "esb_url": {"https://esb.example.com"},
+		"tenant_id": {"demo"}, "project_id": {"shop"},
+	}
+	for _, id := range []string{"migrate-to-esb", "migrate-to-embedded"} {
+		argv, err := BuildArgv(id, form)
+		if err != nil {
+			t.Fatalf("BuildArgv(%s): %v", id, err)
+		}
+		if !strings.Contains(strings.Join(argv, " "), "--source data/events.db") {
+			t.Fatalf("%s argv does not pass source: %v", id, argv)
+		}
+	}
+}
+
 func TestParseForm_SplitsTextareaListValues(t *testing.T) {
 	form := ParseForm(map[string][]string{
 		"fields": {"text\namount:int64\n currency:string "},

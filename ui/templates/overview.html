@@ -43,10 +43,29 @@
 <section>
   <h2>Storage</h2>
   <dl class="kv">
-    <dt>AutoMigrate</dt>
-    <dd>{{if .Project.Migrate}}{{range .Project.Migrate}}<code>{{.}}</code> {{end}}{{else}}<span class="muted">(tidak ada model terdaftar)</span>{{end}}</dd>
-    <dt>Run workers</dt>
-    <dd>{{if .Project.RunWorker}}{{range .Project.RunWorker}}<code>{{.}}</code> {{end}}{{else}}<span class="muted">(tidak ada — projection_workers marker kosong)</span>{{end}}</dd>
+    <dt>Mode</dt>
+    <dd>
+      {{if eq .Project.Storage.Mode "esb-server"}}
+        <span class="badge">esb-server (remote)</span>
+      {{else}}
+        <span class="badge">embedded (lokal)</span>
+      {{end}}
+      <a class="btn small" href="/storage">open storage</a>
+    </dd>
+    {{if .Project.Storage.DSN}}
+    <dt>SQLite</dt><dd><code>{{.Project.Storage.DSN}}</code></dd>
+    {{end}}
+    {{if .Project.Storage.ESBURL}}
+    <dt>ESB URL</dt><dd><code>{{.Project.Storage.ESBURL}}</code></dd>
+    {{end}}
+    <dt>Events</dt>
+    <dd>
+      {{if .Project.Storage.HasSQLite}}
+        {{.Project.Storage.TotalEvents}} event tersimpan
+      {{else}}
+        <span class="muted">(file belum ada)</span>
+      {{end}}
+    </dd>
   </dl>
 </section>
 {{end}}
