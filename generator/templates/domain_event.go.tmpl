@@ -10,6 +10,21 @@ import (
 // Type aliases so domain code imports only this package.
 type Event = eventstore.Event
 type EventRepository = eventstore.EventRepository
+type Snapshot = eventstore.Snapshot
+type Lock = eventstore.Lock
+type Locker = eventstore.Locker
+
+// ErrSnapshotNotFound is returned by EventRepository.LatestSnapshot
+// when an aggregate instance has no stored snapshot yet.
+var ErrSnapshotNotFound = eventstore.ErrSnapshotNotFound
+
+// ErrLockBusy is returned by Locker.AcquireLock when a different
+// owner currently holds the lock.
+var ErrLockBusy = eventstore.ErrLockBusy
+
+// ErrLockNotOwned is returned by Locker.ReleaseLock/RefreshLock when
+// the caller's owner token does not match the current holder.
+var ErrLockNotOwned = eventstore.ErrLockNotOwned
 
 // NewEvent constructs an Event with the given fields.
 func NewEvent(aggregateName, aggregateID, eventName string, version int64, data interface{}) (*Event, error) {

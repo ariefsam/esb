@@ -1,0 +1,127 @@
+package eventstore
+
+import (
+	"context"
+	"encoding/json"
+	"sort"
+	"sync"
+	"time"
+)
+
+// FakeStore is an in-memory EventRepository for tests — no database,
+// no filesystem, no network. It implements the same optimistic-
+// concurrency (StoreAtomic) and snapshot-not-found (LatestSnapshot)
+// semantics as LocalStore/Client, so tests written against it exercise
+// the real contract, not a simplified stand-in.
+type FakeStore struct {
+	mu        sync.Mutex
+	events    []Event
+	snapshots []Snapshot
+}
+
+// NewFakeStore returns an empty FakeStore.
+func NewFakeStore() *FakeStore {
+	return &FakeStore{}
+}
+
+// StoreAtomic implements EventRepository.
+func (s *FakeStore) StoreAtomic(ctx context.Context, e Event, expectedVersion int64) (Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var current int64
+	for _, ev := range s.events {
+		if ev.AggregateName == e.AggregateName && ev.AggregateID == e.AggregateID && ev.Version > current {
+			current = ev.Version
+		}
+	}
+	if current != expectedVersion {
+		return Event{}, ErrConflict
+	}
+
+	e.ID = uint(len(s.events) + 1)
+	e.Version = expectedVersion + 1
+	if e.TimeMillis == 0 {
+		e.TimeMillis = time.Now().UnixMilli()
+	}
+	s.events = append(s.events, e)
+	return e, nil
+}
+
+// Retrieve implements EventRepository.
+func (s *FakeStore) Retrieve(ctx context.Context, aggregateID, aggregateName string, afterVersion int64) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []Event
+	for _, ev := range s.events {
+		if ev.AggregateID == aggregateID && ev.AggregateName == aggregateName && ev.Version > afterVersion {
+			out = append(out, ev)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version < out[j].Version })
+	return out, nil
+}
+
+// FetchAll implements EventRepository.
+func (s *FakeStore) FetchAll(ctx context.Context, aggregateNames []string, afterID uint, limit int) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	names := map[string]bool{}
+	for _, n := range aggregateNames {
+		names[n] = true
+	}
+	var out []Event
+	for _, ev := range s.events {
+		if ev.ID <= afterID {
+			continue
+		}
+		if len(names) > 0 && !names[ev.AggregateName] {
+			continue
+		}
+		out = append(out, ev)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// StoreSnapshot implements EventRepository.
+func (s *FakeStore) StoreSnapshot(ctx context.Context, aggregateName, aggregateID string, version int64, state json.RawMessage) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snap := Snapshot{
+		ID:            uint(len(s.snapshots) + 1),
+		AggregateName: aggregateName,
+		AggregateID:   aggregateID,
+		Version:       version,
+		State:         state,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	s.snapshots = append(s.snapshots, snap)
+	return snap, nil
+}
+
+// LatestSnapshot implements EventRepository.
+func (s *FakeStore) LatestSnapshot(ctx context.Context, aggregateID, aggregateName string) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var latest *Snapshot
+	for i := range s.snapshots {
+		snap := &s.snapshots[i]
+		if snap.AggregateID != aggregateID || snap.AggregateName != aggregateName {
+			continue
+		}
+		if latest == nil || snap.Version > latest.Version {
+			latest = snap
+		}
+	}
+	if latest == nil {
+		return Snapshot{}, ErrSnapshotNotFound
+	}
+	return *latest, nil
+}

@@ -35,6 +35,32 @@ type EventRow struct {
 
 func (EventRow) TableName() string { return "events" }
 
+// SnapshotRow is the SQLite representation of a stored aggregate
+// snapshot. Only the latest row per (aggregate_name, aggregate_id) is
+// read by LatestSnapshot, but older rows are kept for now — callers
+// wanting retention/compaction can prune by TimeMillis or ID.
+type SnapshotRow struct {
+	ID            uint   `gorm:"primaryKey;autoIncrement"`
+	AggregateName string `gorm:"column:aggregate_name;not null;index:idx_snapshots_agg,priority:1"`
+	AggregateID   string `gorm:"column:aggregate_id;not null;index:idx_snapshots_agg,priority:2"`
+	Version       int64  `gorm:"column:version;not null"`
+	State         []byte `gorm:"column:state"`
+	TimeMillis    int64  `gorm:"column:time_millis;not null"`
+}
+
+func (SnapshotRow) TableName() string { return "snapshots" }
+
+// LockRow is the SQLite representation of a held distributed lock.
+// Key is the primary key, so acquiring a currently-unheld or expired
+// key upserts this row rather than inserting a duplicate.
+type LockRow struct {
+	Key        string `gorm:"column:key;primaryKey"`
+	OwnerToken string `gorm:"column:owner_token;not null"`
+	ExpiresAt  int64  `gorm:"column:expires_at;not null"` // unix millis
+}
+
+func (LockRow) TableName() string { return "locks" }
+
 // LocalStore is the embedded EventRepository. It is safe for
 // concurrent use by StoreAtomic because GORM serializes writes
 // inside its own transaction. Retrieve and FetchAll issue plain
@@ -161,6 +187,53 @@ func (s *LocalStore) FetchAll(ctx context.Context, aggregateNames []string, afte
 	return rowsToEvents(rows), nil
 }
 
+// StoreSnapshot persists a new snapshot row for an aggregate instance.
+// It does not delete or overwrite prior snapshots.
+func (s *LocalStore) StoreSnapshot(ctx context.Context, aggregateName, aggregateID string, version int64, state json.RawMessage) (Snapshot, error) {
+	row := SnapshotRow{
+		AggregateName: aggregateName,
+		AggregateID:   aggregateID,
+		Version:       version,
+		State:         []byte(state),
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return Snapshot{}, fmt.Errorf("insert snapshot: %w", err)
+	}
+	return Snapshot{
+		ID:            row.ID,
+		AggregateName: row.AggregateName,
+		AggregateID:   row.AggregateID,
+		Version:       row.Version,
+		State:         json.RawMessage(row.State),
+		TimeMillis:    row.TimeMillis,
+	}, nil
+}
+
+// LatestSnapshot returns the highest-version snapshot row for an
+// aggregate instance, or ErrSnapshotNotFound if none exists yet.
+func (s *LocalStore) LatestSnapshot(ctx context.Context, aggregateID, aggregateName string) (Snapshot, error) {
+	var row SnapshotRow
+	err := s.db.WithContext(ctx).
+		Where("aggregate_id = ? AND aggregate_name = ?", aggregateID, aggregateName).
+		Order("version DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Snapshot{}, ErrSnapshotNotFound
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("query snapshot: %w", err)
+	}
+	return Snapshot{
+		ID:            row.ID,
+		AggregateName: row.AggregateName,
+		AggregateID:   row.AggregateID,
+		Version:       row.Version,
+		State:         json.RawMessage(row.State),
+		TimeMillis:    row.TimeMillis,
+	}, nil
+}
+
 func rowsToEvents(rows []EventRow) []Event {
 	out := make([]Event, len(rows))
 	for i, r := range rows {
@@ -180,13 +253,141 @@ func rowsToEvents(rows []EventRow) []Event {
 	return out
 }
 
-// MigrateLocalStore runs AutoMigrate for the events table. Call this
-// once at startup before constructing LocalStore.
+// MigrateLocalStore runs AutoMigrate for the events, snapshots, and
+// locks tables. Call this once at startup before constructing LocalStore.
 func MigrateLocalStore(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("nil db")
 	}
-	return db.AutoMigrate(&EventRow{})
+	return db.AutoMigrate(&EventRow{}, &SnapshotRow{}, &LockRow{})
+}
+
+// AcquireLock implements Locker. Embedded mode is a single process,
+// so contention is expected to be rare and short-lived; a wait is
+// therefore implemented as simple polling rather than a condition
+// variable per key (which the HTTP server uses for its cross-process
+// long-poll).
+func (s *LocalStore) AcquireLock(ctx context.Context, key, ownerToken string, ttlSeconds, waitTimeoutMillis int) (Lock, error) {
+	deadline := time.Now().Add(time.Duration(waitTimeoutMillis) * time.Millisecond)
+	for {
+		lock, err := s.tryAcquireLock(ctx, key, ownerToken, ttlSeconds)
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, ErrLockBusy) || waitTimeoutMillis <= 0 || !time.Now().Before(deadline) {
+			return Lock{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return Lock{}, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func (s *LocalStore) tryAcquireLock(ctx context.Context, key, ownerToken string, ttlSeconds int) (Lock, error) {
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	var result Lock
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row LockRow
+		err := tx.Where("key = ?", key).First(&row).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			// No current holder.
+		case err != nil:
+			return err
+		default:
+			if time.UnixMilli(row.ExpiresAt).After(now) && row.OwnerToken != ownerToken {
+				return ErrLockBusy
+			}
+			// Expired, or the same owner re-acquiring (refreshes the TTL).
+		}
+		row = LockRow{Key: key, OwnerToken: ownerToken, ExpiresAt: expiresAt.UnixMilli()}
+		// Built as a separate variable, not inlined as a slice-of-struct
+		// literal, because the generator renders this file through
+		// text/template, which reads two adjacent opening braces as
+		// the start of a template action.
+		keyColumn := clause.Column{Name: "key"}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{keyColumn},
+			DoUpdates: clause.AssignmentColumns([]string{"owner_token", "expires_at"}),
+		}).Create(&row).Error; err != nil {
+			return err
+		}
+		result = Lock{Key: key, OwnerToken: ownerToken, ExpiresAt: expiresAt, Held: true}
+		return nil
+	})
+	if err != nil {
+		return Lock{}, err
+	}
+	return result, nil
+}
+
+// ReleaseLock implements Locker.
+func (s *LocalStore) ReleaseLock(ctx context.Context, key, ownerToken string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row LockRow
+		err := tx.Where("key = ?", key).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // already gone; releasing an expired lock is success
+		}
+		if err != nil {
+			return err
+		}
+		if row.OwnerToken != ownerToken {
+			return ErrLockNotOwned
+		}
+		return tx.Delete(&LockRow{}, "key = ?", key).Error
+	})
+}
+
+// RefreshLock implements Locker.
+func (s *LocalStore) RefreshLock(ctx context.Context, key, ownerToken string, ttlSeconds int) (Lock, error) {
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	var result Lock
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row LockRow
+		err := tx.Where("key = ?", key).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrLockNotOwned
+		}
+		if err != nil {
+			return err
+		}
+		if row.OwnerToken != ownerToken || !time.UnixMilli(row.ExpiresAt).After(now) {
+			return ErrLockNotOwned
+		}
+		row.ExpiresAt = expiresAt.UnixMilli()
+		if err := tx.Save(&row).Error; err != nil {
+			return err
+		}
+		result = Lock{Key: key, OwnerToken: ownerToken, ExpiresAt: expiresAt, Held: true}
+		return nil
+	})
+	if err != nil {
+		return Lock{}, err
+	}
+	return result, nil
+}
+
+// GetLock implements Locker.
+func (s *LocalStore) GetLock(ctx context.Context, key string) (Lock, error) {
+	var row LockRow
+	err := s.db.WithContext(ctx).Where("key = ?", key).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Lock{Key: key, Held: false}, nil
+	}
+	if err != nil {
+		return Lock{}, fmt.Errorf("query lock: %w", err)
+	}
+	expiresAt := time.UnixMilli(row.ExpiresAt)
+	lock := Lock{Key: row.Key, ExpiresAt: expiresAt, Held: expiresAt.After(time.Now())}
+	if lock.Held {
+		lock.OwnerToken = row.OwnerToken
+	}
+	return lock, nil
 }
 
 // CountByAggregate returns the number of events per aggregate name.

@@ -74,6 +74,7 @@ toko-online/
 ├── Makefile
 ├── .env.example
 ├── .gitignore
+├── AGENTS.md
 ├── domain/
 │   ├── event.go
 │   └── errors.go
@@ -137,7 +138,8 @@ Yang dihasilkan:
 | File | Isi |
 |------|-----|
 | `domain/<name>.go` | Struct aggregate + `Apply()` + `Replay()` + `Exists()` |
-| `service/<name>.go` | `<Name>Service` dengan helper `store()` |
+| `service/<name>.go` | `<Name>Service` dengan helper `load()`/`store()` (otomatis snapshot tiap N event) |
+| `service/<name>_scenario_test.go` | Contoh test Given-When-Then (lihat bawah) — ganti TODO setelah nambah event/command asli |
 | `projection/<name>_row.go` | GORM model untuk read model |
 | `projection/<name>_worker.go` | Goroutine projection worker |
 
@@ -181,6 +183,11 @@ func (o *Order) Replay(events []Event) error {
 
 func (o *Order) Exists() bool { return o.Version > 0 }
 ```
+
+`service/order.go` menyediakan dua helper yang dipakai command method buatan sendiri:
+
+- `load(ctx, id)` — muat snapshot terakhir (kalau ada) lalu replay event setelahnya; kalau belum ada snapshot, replay dari awal.
+- `store(ctx, agg, eventName, data)` — simpan event dengan optimistic locking, apply ke `agg` supaya state di memori tetap sinkron, dan tiap `OrderSnapshotInterval` versi (default 100) otomatis simpan snapshot baru. Gagal simpan snapshot tidak menggagalkan command — event-nya sudah tersimpan duluan, snapshot murni optimisasi baca.
 
 ---
 
@@ -361,6 +368,8 @@ Setelah jalan, buka URL yang dicetak di terminal.
 | `GET`  | `/commands` | katalog command + form untuk menjalankan command |
 | `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
 | `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |
+| `GET`  | `/storage` | mode event store, event/snapshot count per aggregate, isi tabel locks (embedded) |
+| `GET`, `POST` | `/storage/migrate` | form + eksekusi migrasi embedded ↔ esb-server |
 | `GET`  | `/static/*` | CSS dan helper JS (embedded di binary, offline) |
 
 `POST /commands/execute` mengembalikan `405` untuk method lain,
@@ -454,6 +463,51 @@ Setiap aggregate punya `Version`. Saat menyimpan event, service pass `expectedVe
 _, err = s.eventRepo.StoreAtomic(ctx, event, order.Version)
 // ESB server reject dengan 409 jika version sudah berubah (race condition)
 ```
+
+### Snapshot
+
+`service/<aggregate>.go` otomatis menyimpan snapshot tiap `<Aggregate>SnapshotInterval` versi (default 100) lewat `StoreSnapshot`, dan `load()` selalu coba `LatestSnapshot` dulu sebelum replay — jadi aggregate dengan ribuan event tidak perlu replay dari versi 1 tiap kali dipanggil. Bekerja di kedua mode (embedded: tabel `snapshots` lokal; esb-server: endpoint `/snapshots`).
+
+### Distributed Lock
+
+`wire.App.Locker` (tipe `domain.Locker`) menyediakan mutual exclusion lintas replica/instance — berguna untuk leader election, atau memastikan hanya satu instance yang menjalankan job terjadwal tertentu.
+
+```go
+lock, err := app.Locker.AcquireLock(ctx, "leader", myInstanceID, 30, 0) // ttlSeconds=30, no wait
+switch {
+case err == nil:
+    // jalan sebagai leader; refresh TTL berkala dari goroutine heartbeat:
+    app.Locker.RefreshLock(ctx, "leader", myInstanceID, 30)
+case errors.Is(err, domain.ErrLockBusy):
+    // instance lain sedang jadi leader
+}
+```
+
+Bekerja di kedua mode (embedded: tabel `locks` lokal dengan TTL, wait pakai polling sederhana karena single-process; esb-server: endpoint `/locks/*` dengan long-poll cross-process). `esb ui` (`/storage`) menampilkan isi tabel `locks` untuk mode embedded.
+
+### Testing dengan Given-When-Then
+
+Tiap `esb add aggregate` juga men-generate `service/<name>_scenario_test.go` dan (sekali, saat `esb init`) `eventstore/fake_store.go` + package `testkit`. `FakeStore` adalah `EventRepository` in-memory (tanpa SQLite/HTTP) yang punya semantik sama persis dengan `LocalStore`/`Client` (optimistic concurrency, snapshot not-found) — jadi test lewat `testkit` benar-benar menjalankan `load()`/`store()`/command method asli, bukan mock yang disederhanakan.
+
+```go
+func TestOrderService_PlaceOrder_RejectsDuplicate(t *testing.T) {
+    repo := eventstore.NewFakeStore()
+    svc := NewOrderService(repo)
+
+    testkit.Given(t, repo, domain.OrderAggregateName, "order-1",
+        testkit.Event("OrderPlaced", map[string]any{"amount": int64(1000)}),
+    ).
+        When(func(ctx context.Context) error {
+            return svc.PlaceOrder(ctx, "order-1", 2000)
+        }).
+        ThenError(ErrOrderAlreadyPlaced)
+}
+```
+
+- `Given(t, repo, aggregateName, aggregateID, events...)` — seed event masa lalu (boleh kosong untuk aggregate baru).
+- `.When(func(ctx) error { ... })` — panggil command method asli.
+- `.Then(events...)` — assert event baru yang tersimpan (dibandingkan by value JSON, bukan string persis).
+- `.ThenError(target)` — assert error dari `When` cocok lewat `errors.Is`.
 
 ### Projection Cursor
 

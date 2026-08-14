@@ -240,19 +240,30 @@ func readESBTargetsFromEnv(rootDir string) (esbURL, tenant, project string) {
 // spinning up an HTTP server.
 func buildStoragePage(model inspector.ProjectModel, info inspector.StorageInfo) StoragePage {
 	page := StoragePage{
-		Kind:        PageStorage,
-		Project:     model,
-		Mode:        info.Mode,
-		ModeLabel:   modeLabel(info.Mode),
-		DSN:         info.DSN,
-		ESBURL:      info.ESBURL,
-		TotalEvents: info.TotalEvents(),
-		HasSQLite:   info.HasSQLite,
+		Kind:           PageStorage,
+		Project:        model,
+		Mode:           info.Mode,
+		ModeLabel:      modeLabel(info.Mode),
+		DSN:            info.DSN,
+		ESBURL:         info.ESBURL,
+		TotalEvents:    info.TotalEvents(),
+		TotalSnapshots: info.TotalSnapshots(),
+		HasSQLite:      info.HasSQLite,
+		HeldLockCount:  info.HeldLockCount(),
 	}
 	for _, name := range info.SortedAggregateNames() {
 		page.Rows = append(page.Rows, StorageAggregateRow{
-			Name:  name,
-			Count: info.Counts[name],
+			Name:          name,
+			Count:         info.Counts[name],
+			SnapshotCount: info.SnapshotCounts[name],
+		})
+	}
+	for _, lock := range info.Locks {
+		page.Locks = append(page.Locks, StorageLockRow{
+			Key:        lock.Key,
+			OwnerToken: lock.OwnerToken,
+			ExpiresAt:  lock.ExpiresAt.Local().Format("2006-01-02 15:04:05"),
+			Held:       lock.Held,
 		})
 	}
 	// Read any recorded migration state so the page can show the
