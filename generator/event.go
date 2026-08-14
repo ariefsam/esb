@@ -3,7 +3,6 @@ package generator
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strings"
 	"text/template"
 
@@ -103,13 +102,17 @@ func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
 	domainFile := "domain/" + aggregateName + ".go"
 	workerFile := "projection/" + aggregateName + "_worker.go"
 
-	if ok, _ := injector.AlreadyContains(domainFile, "type "+eventName+" struct"); ok {
+	tx := injector.NewTx()
+
+	if ok, err := tx.Contains(domainFile, "type "+eventName+" struct"); err != nil {
+		return err
+	} else if ok {
 		return fmt.Errorf("event %s already exists in %s", eventName, domainFile)
 	}
 
 	// 1. Ensure "time" is imported (needed by constructors).
-	if err := injector.EnsureImport(domainFile, "time"); err != nil {
-		fmt.Printf("  warn    could not inject time import: %v\n", err)
+	if err := tx.EnsureImport(domainFile, "time"); err != nil {
+		return err
 	}
 
 	// 2. Append event struct + constructor to domain file.
@@ -117,20 +120,17 @@ func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
 	if err != nil {
 		return fmt.Errorf("render event struct: %w", err)
 	}
-	if err := appendToFile(domainFile, structCode); err != nil {
-		return fmt.Errorf("append to %s: %w", domainFile, err)
+	if err := tx.Append(domainFile, structCode); err != nil {
+		return err
 	}
-	fmt.Printf("  update  %s (struct + constructor)\n", domainFile)
 
 	// 3. Inject Apply() case.
 	applyCase, err := renderWithFuncs(applyCaseTmpl, data)
 	if err != nil {
 		return fmt.Errorf("render apply case: %w", err)
 	}
-	if err := injector.InjectAfterMarker(domainFile, "// esb:inject:apply-cases", applyCase); err != nil {
-		fmt.Printf("  warn    could not inject Apply() case: %v\n", err)
-	} else {
-		fmt.Printf("  update  %s (Apply case)\n", domainFile)
+	if err := tx.InjectAfterMarker(domainFile, "// esb:inject:apply-cases", applyCase); err != nil {
+		return err
 	}
 
 	// 4. Inject projection worker case.
@@ -138,23 +138,17 @@ func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
 	if err != nil {
 		return fmt.Errorf("render worker case: %w", err)
 	}
-	if err := injector.InjectAfterMarker(workerFile, "// esb:inject:applyevent-cases", workerCase); err != nil {
-		fmt.Printf("  warn    could not inject worker case into %s: %v\n", workerFile, err)
-	} else {
-		fmt.Printf("  update  %s\n", workerFile)
-	}
-
-	return nil
-}
-
-func appendToFile(path, content string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
+	if err := tx.InjectAfterMarker(workerFile, "// esb:inject:applyevent-cases", workerCase); err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.WriteString(content)
-	return err
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	fmt.Printf("  update  %s (struct + constructor)\n", domainFile)
+	fmt.Printf("  update  %s (Apply case)\n", domainFile)
+	fmt.Printf("  update  %s\n", workerFile)
+	return nil
 }
 
 func renderWithFuncs(tmplStr string, data any) (string, error) {

@@ -34,12 +34,24 @@ func AddQuery(queryName, aggregateName string) error {
 		return fmt.Errorf("render query: %w", err)
 	}
 
-	if ok, _ := injector.AlreadyContains("projection/query.go", data.QueryNamePascal); ok {
+	tx := injector.NewTx()
+
+	// Guard against re-adding the same query. A bare substring check would
+	// false-positive ("Order" matching an existing "OrderItems" func), so we
+	// match the full function declaration on a word boundary instead.
+	existing, err := tx.Contains("projection/query.go", "func "+data.QueryNamePascal+"(")
+	if err != nil {
+		return err
+	}
+	if existing {
 		return fmt.Errorf("query %s already exists in projection/query.go", data.QueryNamePascal)
 	}
 
-	if err := appendToFile("projection/query.go", queryCode); err != nil {
-		return fmt.Errorf("append to projection/query.go: %w", err)
+	if err := tx.Append("projection/query.go", queryCode); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	fmt.Println("  update  projection/query.go")
 	return nil
