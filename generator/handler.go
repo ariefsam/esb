@@ -39,20 +39,51 @@ func AddHandler(handlerName, aggregateName string) error {
 		}
 	}
 
-	// Inject App field into wire/wire.go
+	// wire/wire.go references both the handler package and the aggregate's
+	// service, neither of which the base template imports — add them now.
+	if err := injector.EnsureImport("wire/wire.go", moduleName+"/server/handler"); err != nil {
+		fmt.Printf("  warn    %v\n", err)
+	}
+	if err := injector.EnsureImport("wire/wire.go", moduleName+"/service"); err != nil {
+		fmt.Printf("  warn    %v\n", err)
+	}
+
+	// Inject the handler's App field, construction, and return wiring.
+	svcVar := lcFirst(data.AggregateNamePascal) + "Svc"
 	handlerField := data.HandlerNamePascal + "Handler"
 	if ok, _ := injector.AlreadyContains("wire/wire.go", handlerField); !ok {
 		appField := "\t" + handlerField + " *handler." + handlerField
-		injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", appField)
+		if err := injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", appField); err != nil {
+			fmt.Printf("  warn    %v\n", err)
+		}
 
 		varName := lcFirst(data.HandlerNamePascal) + "Handler"
-		initCode := "\t" + varName + " := handler.New" + data.HandlerNamePascal + "Handler(" + lcFirst(data.AggregateNamePascal) + "Svc)"
-		injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", initCode)
+		initCode := "\t" + varName + " := handler.New" + data.HandlerNamePascal + "Handler(" + svcVar + ")"
+		if err := injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", initCode); err != nil {
+			fmt.Printf("  warn    %v\n", err)
+		}
 
 		returnField := "\t\t" + handlerField + ": " + varName + ","
-		injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", returnField)
+		if err := injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", returnField); err != nil {
+			fmt.Printf("  warn    %v\n", err)
+		}
 
 		fmt.Println("  update  wire/wire.go")
+	}
+
+	// Ensure the aggregate's service is constructed in NewApp so the handler
+	// has a dependency to receive. Guarded independently of the handler so
+	// multiple handlers on the same aggregate share a single service. Injected
+	// at the dedicated app-services marker, which sits physically above
+	// app-init in the template, so the service is always declared before any
+	// handler that references it (Go requires declare-before-use).
+	if ok, _ := injector.AlreadyContains("wire/wire.go", svcVar+" :="); !ok {
+		svcInit := "\t" + svcVar + " := service.New" + data.AggregateNamePascal + "Service(eventRepo)"
+		if err := injector.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", svcInit); err != nil {
+			fmt.Printf("  warn    %v\n", err)
+		} else {
+			fmt.Println("  update  wire/wire.go (service)")
+		}
 	}
 
 	return nil

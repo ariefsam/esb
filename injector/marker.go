@@ -36,8 +36,8 @@ func InjectAfterMarker(path, marker, code string) error {
 }
 
 // EnsureImport adds importPath to the import block of a Go source file if it
-// is not already present. It matches against the last path segment (e.g.
-// `"mymod/service"` is already imported when the file contains `service`).
+// is not already present. Presence is detected by an exact match of the
+// quoted full import path (e.g. `"mymod/service"`), not the last segment.
 func EnsureImport(path, importPath string) error {
 	src, err := os.ReadFile(path)
 	if err != nil {

@@ -77,13 +77,23 @@ func ToKebabCase(s string) string {
 //
 //	"user"         → "users"
 //	"policy"       → "policies"
+//	"gateway"      → "gateways"
 //	"bank_account" → "bank_accounts"
 func ToPlural(s string) string {
-	if strings.HasSuffix(s, "y") {
-		// consonant+y → ies; vowel+y → ys (good enough for table names)
+	if strings.HasSuffix(s, "y") && len(s) >= 2 && !isVowel(rune(s[len(s)-2])) {
+		// consonant+y → ies (policy → policies)
 		return s[:len(s)-1] + "ies"
 	}
+	// vowel+y → ys (gateway → gateways), everything else → +s
 	return s + "s"
+}
+
+func isVowel(r rune) bool {
+	switch unicode.ToLower(r) {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	}
+	return false
 }
 
 // PackageName returns a valid Go package name from a module path.
