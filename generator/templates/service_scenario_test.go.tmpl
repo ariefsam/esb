@@ -1,0 +1,33 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+	"{{.ModuleName}}/testkit"
+)
+
+// Test{{.AggregateNamePascal}}Service_ExampleScenario demonstrates the
+// Given-When-Then pattern (see the testkit package) for testing
+// command methods against an in-memory event store. Replace the TODOs
+// once you've added real events (esb add event {{.AggregateName}} ...)
+// and written a command method on {{.AggregateNamePascal}}Service that
+// decides what to store.
+func Test{{.AggregateNamePascal}}Service_ExampleScenario(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.AggregateNamePascal}}Service(repo)
+
+	testkit.Given(t, repo, domain.{{.AggregateNamePascal}}AggregateName, "{{.AggregateName}}-1").
+		When(func(ctx context.Context) error {
+			agg, err := svc.load(ctx, "{{.AggregateName}}-1")
+			if err != nil {
+				return err
+			}
+			// TODO: replace with your own command method, e.g.:
+			//   return svc.Place{{.AggregateNamePascal}}(ctx, "{{.AggregateName}}-1", Place{{.AggregateNamePascal}}Cmd{...})
+			return svc.store(ctx, agg, "TODO_EventName", map[string]any{})
+		}).
+		Then(testkit.Event("TODO_EventName", map[string]any{}))
+}

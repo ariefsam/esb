@@ -1,0 +1,138 @@
+// Package testkit provides a Given-When-Then helper for testing
+// command methods against an in-memory event store — no database, no
+// HTTP server, no goroutine leaks. It exercises the real service code
+// (load/store, optimistic concurrency) against eventstore.FakeStore.
+package testkit
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"{{.ModuleName}}/eventstore"
+)
+
+// GivenEvent is one event to seed (Given) or expect (Then).
+type GivenEvent struct {
+	Name string
+	Data any
+}
+
+// Event builds a GivenEvent — shorthand for Given/Then argument lists.
+func Event(name string, data any) GivenEvent {
+	return GivenEvent{Name: name, Data: data}
+}
+
+// Scenario is a Given-When-Then test scenario for one aggregate
+// instance. Build one with Given, drive it with When, and assert the
+// outcome with Then or ThenError.
+type Scenario struct {
+	t             *testing.T
+	ctx           context.Context
+	repo          *eventstore.FakeStore
+	aggregateName string
+	aggregateID   string
+	givenCount    int64
+	whenErr       error
+	ranWhen       bool
+}
+
+// Given seeds past events for (aggregateName, aggregateID) into repo
+// and returns a Scenario ready for When. Zero events represents a
+// brand-new aggregate instance that has never been stored.
+func Given(t *testing.T, repo *eventstore.FakeStore, aggregateName, aggregateID string, events ...GivenEvent) *Scenario {
+	t.Helper()
+	s := &Scenario{
+		t:             t,
+		ctx:           context.Background(),
+		repo:          repo,
+		aggregateName: aggregateName,
+		aggregateID:   aggregateID,
+	}
+	for _, e := range events {
+		b, err := json.Marshal(e.Data)
+		if err != nil {
+			t.Fatalf("testkit: marshal given event %s: %v", e.Name, err)
+		}
+		if _, err := repo.StoreAtomic(s.ctx, eventstore.Event{
+			AggregateName: aggregateName,
+			AggregateID:   aggregateID,
+			EventName:     e.Name,
+			Data:          b,
+		}, s.givenCount); err != nil {
+			t.Fatalf("testkit: seed given event %s: %v", e.Name, err)
+		}
+		s.givenCount++
+	}
+	return s
+}
+
+// When runs fn — typically a call into your service's load() plus a
+// command method — and records the error it returns for Then/ThenError.
+func (s *Scenario) When(fn func(ctx context.Context) error) *Scenario {
+	s.t.Helper()
+	s.whenErr = fn(s.ctx)
+	s.ranWhen = true
+	return s
+}
+
+// Then asserts When succeeded and appended exactly these events, in
+// order, after the Given events. Data is compared by JSON value, so
+// field order does not matter but types/values must match.
+func (s *Scenario) Then(expected ...GivenEvent) {
+	s.t.Helper()
+	if !s.ranWhen {
+		s.t.Fatal("testkit: Then called before When")
+	}
+	if s.whenErr != nil {
+		s.t.Fatalf("testkit: When returned an unexpected error: %v", s.whenErr)
+	}
+
+	got, err := s.repo.Retrieve(s.ctx, s.aggregateID, s.aggregateName, s.givenCount)
+	if err != nil {
+		s.t.Fatalf("testkit: retrieve events: %v", err)
+	}
+	if len(got) != len(expected) {
+		s.t.Fatalf("testkit: got %d new event(s), want %d\ngot:  %+v\nwant: %+v", len(got), len(expected), got, expected)
+	}
+	for i, want := range expected {
+		if got[i].EventName != want.Name {
+			s.t.Fatalf("testkit: event %d name = %q, want %q", i, got[i].EventName, want.Name)
+		}
+		wantJSON, err := json.Marshal(want.Data)
+		if err != nil {
+			s.t.Fatalf("testkit: marshal expected event %s: %v", want.Name, err)
+		}
+		if !jsonEqual(got[i].Data, wantJSON) {
+			s.t.Fatalf("testkit: event %d (%s) data = %s, want %s", i, want.Name, got[i].Data, wantJSON)
+		}
+	}
+}
+
+// ThenError asserts When returned an error matching target, checked
+// with errors.Is.
+func (s *Scenario) ThenError(target error) {
+	s.t.Helper()
+	if !s.ranWhen {
+		s.t.Fatal("testkit: ThenError called before When")
+	}
+	if !errors.Is(s.whenErr, target) {
+		s.t.Fatalf("testkit: When error = %v, want %v", s.whenErr, target)
+	}
+}
+
+// jsonEqual compares two JSON values for semantic equality — key
+// order and whitespace do not matter.
+func jsonEqual(a, b []byte) bool {
+	var av, bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	aJSON, _ := json.Marshal(av)
+	bJSON, _ := json.Marshal(bv)
+	return string(aJSON) == string(bJSON)
+}

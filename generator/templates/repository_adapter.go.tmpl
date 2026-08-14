@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 
 	"{{.ModuleName}}/eventstore"
 )
@@ -34,4 +35,28 @@ func (a *EventStoreAdapter) Retrieve(ctx context.Context, aggregateID, aggregate
 
 func (a *EventStoreAdapter) FetchAll(ctx context.Context, aggregateNames []string, afterID uint, limit int) ([]eventstore.Event, error) {
 	return a.client.EventsAll(ctx, aggregateNames, afterID, limit)
+}
+
+func (a *EventStoreAdapter) StoreSnapshot(ctx context.Context, aggregateName, aggregateID string, version int64, state json.RawMessage) (eventstore.Snapshot, error) {
+	return a.client.StoreSnapshot(ctx, aggregateName, aggregateID, version, state)
+}
+
+func (a *EventStoreAdapter) LatestSnapshot(ctx context.Context, aggregateID, aggregateName string) (eventstore.Snapshot, error) {
+	return a.client.LatestSnapshot(ctx, aggregateID, aggregateName)
+}
+
+func (a *EventStoreAdapter) AcquireLock(ctx context.Context, key, ownerToken string, ttlSeconds, waitTimeoutMillis int) (eventstore.Lock, error) {
+	return a.client.AcquireLock(ctx, key, ownerToken, ttlSeconds, waitTimeoutMillis)
+}
+
+func (a *EventStoreAdapter) ReleaseLock(ctx context.Context, key, ownerToken string) error {
+	return a.client.ReleaseLock(ctx, key, ownerToken)
+}
+
+func (a *EventStoreAdapter) RefreshLock(ctx context.Context, key, ownerToken string, ttlSeconds int) (eventstore.Lock, error) {
+	return a.client.RefreshLock(ctx, key, ownerToken, ttlSeconds)
+}
+
+func (a *EventStoreAdapter) GetLock(ctx context.Context, key string) (eventstore.Lock, error) {
+	return a.client.GetLock(ctx, key)
 }

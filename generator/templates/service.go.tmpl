@@ -3,10 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"{{.ModuleName}}/domain"
 )
+
+// {{.AggregateNamePascal}}SnapshotInterval controls how often store()
+// persists a full aggregate snapshot. A lower value speeds up load()
+// for long-lived aggregates at the cost of more frequent snapshot writes.
+const {{.AggregateNamePascal}}SnapshotInterval = 100
 
 // {{.AggregateNamePascal}}Service handles commands for the {{.AggregateNamePascal}} aggregate.
 type {{.AggregateNamePascal}}Service struct {
@@ -17,31 +24,67 @@ func New{{.AggregateNamePascal}}Service(repo domain.EventRepository) *{{.Aggrega
 	return &{{.AggregateNamePascal}}Service{eventRepo: repo}
 }
 
-// load replays all events for an aggregate instance from the event store.
+// load rebuilds an aggregate instance from its latest snapshot (if any)
+// plus every event stored after it, falling back to a full replay when
+// no snapshot exists yet.
 func (s *{{.AggregateNamePascal}}Service) load(ctx context.Context, id string) (*domain.{{.AggregateNamePascal}}, error) {
-	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.AggregateNamePascal}}AggregateName, 0)
+	agg := domain.New{{.AggregateNamePascal}}()
+	agg.AggregateID = id
+
+	var afterVersion int64
+	snap, err := s.eventRepo.LatestSnapshot(ctx, id, domain.{{.AggregateNamePascal}}AggregateName)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(snap.State, agg); err != nil {
+			return nil, fmt.Errorf("restore snapshot: %w", err)
+		}
+		afterVersion = snap.Version
+	case errors.Is(err, domain.ErrSnapshotNotFound):
+		// No snapshot yet; replay from the beginning.
+	default:
+		return nil, fmt.Errorf("load snapshot: %w", err)
+	}
+
+	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.AggregateNamePascal}}AggregateName, afterVersion)
 	if err != nil {
 		return nil, err
 	}
-	agg := domain.New{{.AggregateNamePascal}}()
-	agg.AggregateID = id
 	return agg, agg.Replay(events)
 }
 
-// store appends one event to the event store with optimistic locking.
-func (s *{{.AggregateNamePascal}}Service) store(ctx context.Context, id, eventName string, version, expectedVersion int64, data any) error {
+// store appends one event to the event store with optimistic locking,
+// applies it to agg so the caller's in-memory copy stays current, and
+// every {{.AggregateNamePascal}}SnapshotInterval versions persists a
+// snapshot so future load() calls can skip ahead instead of replaying
+// the full history.
+func (s *{{.AggregateNamePascal}}Service) store(ctx context.Context, agg *domain.{{.AggregateNamePascal}}, eventName string, data any) error {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
+	expectedVersion := agg.Version
 	e := domain.Event{
 		AggregateName: domain.{{.AggregateNamePascal}}AggregateName,
-		AggregateID:   id,
+		AggregateID:   agg.AggregateID,
 		EventName:     eventName,
-		Version:       version,
+		Version:       expectedVersion + 1,
 		Data:          b,
 		TimeMillis:    time.Now().UnixMilli(),
 	}
-	_, err = s.eventRepo.StoreAtomic(ctx, e, expectedVersion)
-	return err
+	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
+		return err
+	}
+	if err := agg.Apply(eventName, b); err != nil {
+		return err
+	}
+
+	// Snapshotting is an optimization for load(), not the source of
+	// truth — the event above is already durably stored, so a failure
+	// here is intentionally ignored rather than failing the command.
+	if agg.Version > 0 && agg.Version%{{.AggregateNamePascal}}SnapshotInterval == 0 {
+		if state, err := json.Marshal(agg); err == nil {
+			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.AggregateNamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
+		}
+	}
+	return nil
 }

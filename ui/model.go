@@ -88,14 +88,15 @@ type AggregateRow struct {
 // removed; the page focuses on handlers, queries, and projection
 // workers for now.
 type AggregateDetailPage struct {
-	Kind     PageKind
-	Project  inspector.ProjectModel
-	Name     string
-	Events   []string
-	Handlers []inspector.Handler
-	Queries  []inspector.Query
-	Workers  []inspector.Projection
-	Other    []string
+	Kind         PageKind
+	Project      inspector.ProjectModel
+	Name         string
+	Events       []string
+	EventDetails []inspector.EventDetail
+	Handlers     []inspector.Handler
+	Queries      []inspector.Query
+	Workers      []inspector.Projection
+	Other        []string
 }
 
 // CommandsPage renders the command catalog and the per-command forms.
@@ -179,8 +180,18 @@ type ErrorPage struct {
 
 // StorageAggregateRow is one row on the /storage aggregate table.
 type StorageAggregateRow struct {
-	Name  string
-	Count int
+	Name          string
+	Count         int
+	SnapshotCount int
+}
+
+// StorageLockRow is one row on the /storage locks table. ExpiresAt
+// is pre-formatted so the template does no time math.
+type StorageLockRow struct {
+	Key        string
+	OwnerToken string
+	ExpiresAt  string
+	Held       bool
 }
 
 // StoragePage is the view-model for `GET /storage`. It surfaces
@@ -188,18 +199,21 @@ type StorageAggregateRow struct {
 // per-aggregate event counts so the user can decide whether to
 // trigger a migration.
 type StoragePage struct {
-	Kind         PageKind
-	Project      inspector.ProjectModel
-	Mode         string // "embedded" or "esb-server"
-	ModeLabel    string // human label for the badge
-	DSN          string // embedded SQLite path, absolute
-	ESBURL       string // remote URL when mode == esb-server
-	TotalEvents  int
-	HasSQLite    bool   // false when DSN is unset or file unreadable
-	Rows         []StorageAggregateRow
-	MigrationDirection  string // "to-esb", "to-embedded", or ""
-	MigrationCount      int
-	CanMigrateToESB     bool
+	Kind                 PageKind
+	Project              inspector.ProjectModel
+	Mode                 string // "embedded" or "esb-server"
+	ModeLabel            string // human label for the badge
+	DSN                  string // embedded SQLite path, absolute
+	ESBURL               string // remote URL when mode == esb-server
+	TotalEvents          int
+	TotalSnapshots       int
+	HasSQLite            bool // false when DSN is unset or file unreadable
+	Rows                 []StorageAggregateRow
+	Locks                []StorageLockRow
+	HeldLockCount        int
+	MigrationDirection   string // "to-esb", "to-embedded", or ""
+	MigrationCount       int
+	CanMigrateToESB      bool
 	CanMigrateToEmbedded bool
 }
 
@@ -207,14 +221,14 @@ type StoragePage struct {
 // Pre-fill ESB_URL/TENANT_ID/PROJECT_ID from the project's .env so the
 // user only needs to confirm — manual override is allowed.
 type MigrateFormPage struct {
-	Kind     PageKind
-	Project  inspector.ProjectModel
-	Mode     string
-	DSN      string
-	ESBURL   string
-	TenantID string
-	ProjectID string
-	EventsToMigrate int // events visible to be migrated
+	Kind            PageKind
+	Project         inspector.ProjectModel
+	Mode            string
+	DSN             string
+	ESBURL          string
+	TenantID        string
+	ProjectID       string
+	EventsToMigrate int    // events visible to be migrated
 	Direction       string // "to-esb" or "to-embedded" (query param)
-	Error    string // pre-fill error banner when a previous run was rejected
+	Error           string // pre-fill error banner when a previous run was rejected
 }

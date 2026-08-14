@@ -14,8 +14,8 @@ import (
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 
-	"{{.ModuleName}}/eventstore"
 	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
 	"{{.ModuleName}}/projection"
 	"{{.ModuleName}}/repository"
 	"{{.ModuleName}}/server"
@@ -33,20 +33,25 @@ var validEventStoreMode = map[string]bool{
 
 // Env holds all configuration loaded from environment variables.
 type Env struct {
-	Addr            string
-	ESBURL          string
-	TenantID        string
-	ProjectID       string
-	JWTIssuer       string
-	DBDSN           string
-	EventStoreMode  string // "embedded" or "esb-server"
-	EventStoreDSN   string // optional override; defaults to DBDSN when embedded
+	Addr           string
+	ESBURL         string
+	TenantID       string
+	ProjectID      string
+	JWTIssuer      string
+	DBDSN          string
+	EventStoreMode string // "embedded" or "esb-server"
+	EventStoreDSN  string // optional override; defaults to DBDSN when embedded
 }
 
 // App is the root application container.
 type App struct {
 	Env     *Env
 	Handler http.Handler
+	// Locker provides mutual exclusion across replicas (leader
+	// election, serializing a scheduled job, etc.) — see
+	// domain.Locker. Backed by the same store as the event
+	// repository (HTTP or embedded SQLite) depending on EVENT_STORE_MODE.
+	Locker domain.Locker
 	// esb:inject:app-fields
 }
 
@@ -86,6 +91,15 @@ func NewApp() (*App, error) {
 	_ = eventRepo
 	_ = db
 
+	// Every buildEventRepository branch returns a concrete adapter that
+	// also implements domain.Locker (EventStoreAdapter/LocalAdapter both
+	// do) — this assertion only fails if a future branch adds a new
+	// adapter type and forgets the four lock methods.
+	locker, ok := eventRepo.(domain.Locker)
+	if !ok {
+		panic("eventRepo does not implement domain.Locker")
+	}
+
 	router := mux.NewRouter()
 	server.RegisterRoutes(router)
 
@@ -94,6 +108,7 @@ func NewApp() (*App, error) {
 	return &App{
 		Env:     env,
 		Handler: router,
+		Locker:  locker,
 		// esb:inject:app-return-fields
 	}, nil
 }

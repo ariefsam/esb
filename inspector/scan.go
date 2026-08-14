@@ -29,16 +29,34 @@ type ProjectModel struct {
 	Handler     []Handler
 	Query       []Query
 	Wire        WireGraph
-	Migrate     []string // GORM models in projection/db.go AutoMigrate
-	RunWorker   []string // workers in main.go
+	Migrate     []string    // GORM models in projection/db.go AutoMigrate
+	RunWorker   []string    // workers in main.go
 	Storage     StorageInfo // event store mode + per-aggregate event counts
 }
 
 // Aggregate is one file in domain/ (excluding event.go / errors.go).
 type Aggregate struct {
-	Name     string // aggregate-store name from the generated constant (for example "bank-account")
-	FileName string // snake_case file name (without .go), used to identify the root struct
-	Events   []string
+	Name         string // aggregate-store name from the generated constant (for example "bank-account")
+	FileName     string // snake_case file name (without .go), used to identify the root struct
+	Events       []string
+	EventDetails []EventDetail
+}
+
+// EventDetail describes one event's fields, extracted from its
+// generated struct declaration in domain/<aggregate>.go. Fields is
+// empty when the event name was found only via an Apply() case
+// branch with no matching generated struct (e.g. a hand-written
+// event that skipped `esb add event`).
+type EventDetail struct {
+	Name   string
+	Fields []EventField
+}
+
+// EventField is one field of a generated event struct.
+type EventField struct {
+	Name    string // Go field name, PascalCase
+	Type    string // Go type as written (string, int64, ...)
+	JSONTag string
 }
 
 // Projection is one projection worker. Multi is true when the worker
@@ -187,14 +205,15 @@ func scanAggregates(dir string, m *ProjectModel) error {
 		if !ok {
 			continue
 		}
-		events, err := extractEvents(path)
+		details, err := extractEvents(path)
 		if err != nil {
 			return err
 		}
 		agg := Aggregate{
-			Name:     aggName,
-			FileName: aggFileName,
-			Events:   events,
+			Name:         aggName,
+			FileName:     aggFileName,
+			Events:       eventNames(details),
+			EventDetails: details,
 		}
 		m.Aggregate = append(m.Aggregate, agg)
 	}
@@ -248,34 +267,83 @@ var structEventRegex = regexp.MustCompile(`^type\s+([A-Z][A-Za-z0-9]+)\s+struct\
 // applyCaseRegex matches `case "Foo":` inside Apply().
 var applyCaseRegex = regexp.MustCompile(`case\s+"([A-Z][A-Za-z0-9]+)"`)
 
-// extractEvents returns event names anchored to either generated event
-// declaration comments or case branches inside Apply(). Declaration order is
-// preserved, followed by any Apply-only event names.
+// eventFieldRegex matches one field line inside a generated event
+// struct, e.g. `Amount     int64  `json:"amount"“ (gofmt pads the
+// columns with variable whitespace, hence \s+ rather than a fixed
+// single space).
+var eventFieldRegex = regexp.MustCompile("^([A-Z][A-Za-z0-9]*)\\s+([A-Za-z0-9_.\\[\\]\\*]+)\\s+`json:\"([a-zA-Z0-9_]+)(?:,[^\"]*)?\"`")
+
+// eventNames projects EventDetail.Name for callers that only need the
+// flat list (aggregate counts, esb show, the overview chips).
+func eventNames(details []EventDetail) []string {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]string, len(details))
+	for i, d := range details {
+		out[i] = d.Name
+	}
+	return out
+}
+
+// extractEvents returns events anchored to either generated event
+// declaration comments (with their struct fields, when the struct is
+// found) or bare case branches inside Apply() (fields left empty).
+// Declaration order is preserved, followed by any Apply-only events.
 //
 // Apply() detection tracks brace depth rather than relying on gofmt-style
 // top-level closing braces so that non-gofmt files (or hand-edited Apply
 // bodies) do not leak the inApply flag into unrelated code below.
-func extractEvents(path string) ([]string, error) {
+func extractEvents(path string) ([]EventDetail, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	seen := map[string]bool{}
-	var out []string
-	add := func(name string) {
-		if name != "" && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
+	// byName + order decouple "have we seen this event" from file
+	// order: Apply() is typically scanned before the struct
+	// declarations it references (Apply/Replay/Exists come first in
+	// domain_aggregate.go.tmpl, events are appended after), so a bare
+	// Apply-case match (no fields) must not block a later struct match
+	// from filling in the real fields for the same event name.
+	byName := map[string]*EventDetail{}
+	var order []string
+	add := func(name string, fields []EventField) {
+		if name == "" {
+			return
 		}
+		if existing, ok := byName[name]; ok {
+			if len(existing.Fields) == 0 && len(fields) > 0 {
+				existing.Fields = fields
+			}
+			return
+		}
+		order = append(order, name)
+		byName[name] = &EventDetail{Name: name, Fields: fields}
 	}
 
 	lines := strings.Split(string(src), "\n")
 	pendingGeneratedEvent := ""
+	inEventStruct := false
+	var eventFields []EventField
 	inApply := false
 	applyDepth := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+
+		if inEventStruct {
+			if trimmed == "}" {
+				add(pendingGeneratedEvent, eventFields)
+				inEventStruct = false
+				pendingGeneratedEvent = ""
+				eventFields = nil
+				continue
+			}
+			if m := eventFieldRegex.FindStringSubmatch(trimmed); m != nil {
+				eventFields = append(eventFields, EventField{Name: m[1], Type: m[2], JSONTag: m[3]})
+			}
+			continue
+		}
 
 		if !inApply {
 			if m := generatedEventCommentRegex.FindStringSubmatch(trimmed); m != nil {
@@ -287,7 +355,9 @@ func extractEvents(path string) ([]string, error) {
 					continue
 				}
 				if m := structEventRegex.FindStringSubmatch(trimmed); m != nil && m[1] == pendingGeneratedEvent {
-					add(m[1])
+					inEventStruct = true
+					eventFields = nil
+					continue
 				}
 				pendingGeneratedEvent = ""
 			}
@@ -331,9 +401,14 @@ func extractEvents(path string) ([]string, error) {
 				continue
 			}
 			if m := applyCaseRegex.FindStringSubmatch(trimmed); m != nil {
-				add(m[1])
+				add(m[1], nil)
 			}
 		}
+	}
+
+	out := make([]EventDetail, 0, len(order))
+	for _, name := range order {
+		out = append(out, *byName[name])
 	}
 	return out, nil
 }

@@ -59,17 +59,17 @@ type StoreRequest struct {
 
 // Event is the server representation of a stored event.
 type Event struct {
-	ID            uint            `json:"ID"`
-	EventID       string          `json:"EventID"`
-	AggregateName string          `json:"AggregateName"`
-	AggregateID   string          `json:"AggregateID"`
-	EventName     string          `json:"EventName"`
-	Version       int64           `json:"Version"`
-	Data          json.RawMessage `json:"Data"`
-	TimeMillis    int64           `json:"TimeMillis"`
-	CorrelationID string          `json:"CorrelationID"`
-	CausationID   string          `json:"CausationID"`
-	IdempotencyKey string         `json:"IdempotencyKey"`
+	ID             uint            `json:"ID"`
+	EventID        string          `json:"EventID"`
+	AggregateName  string          `json:"AggregateName"`
+	AggregateID    string          `json:"AggregateID"`
+	EventName      string          `json:"EventName"`
+	Version        int64           `json:"Version"`
+	Data           json.RawMessage `json:"Data"`
+	TimeMillis     int64           `json:"TimeMillis"`
+	CorrelationID  string          `json:"CorrelationID"`
+	CausationID    string          `json:"CausationID"`
+	IdempotencyKey string          `json:"IdempotencyKey"`
 }
 
 // Snapshot is the server representation of an aggregate snapshot.
@@ -129,14 +129,23 @@ func (c *Client) StoreSnapshot(ctx context.Context, aggregateName, aggregateID s
 	return snap, err
 }
 
-// LatestSnapshot retrieves the most recently stored snapshot for an aggregate instance.
+// LatestSnapshot retrieves the most recently stored snapshot for an
+// aggregate instance. Returns ErrSnapshotNotFound if none exists yet —
+// callers should fall back to replaying the full event history.
 func (c *Client) LatestSnapshot(ctx context.Context, aggregateID, aggregateName string) (Snapshot, error) {
 	q := url.Values{}
 	q.Set("aggregate_id", aggregateID)
 	q.Set("aggregate_name", aggregateName)
 	var snap Snapshot
 	err := c.do(ctx, http.MethodGet, "/snapshots?"+q.Encode(), nil, &snap)
-	return snap, err
+	if err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && he.StatusCode == http.StatusNotFound {
+			return Snapshot{}, ErrSnapshotNotFound
+		}
+		return Snapshot{}, err
+	}
+	return snap, nil
 }
 
 // HTTPError is returned when the server responds with a 4xx or 5xx status.
@@ -154,6 +163,52 @@ var ErrKVNotFound = errors.New("kv: key not found or expired")
 
 // ErrConflict is returned when an event version already exists for an aggregate.
 var ErrConflict = errors.New("event store: version conflict")
+
+// ErrSnapshotNotFound is returned by LatestSnapshot when an aggregate
+// instance has no stored snapshot yet.
+var ErrSnapshotNotFound = errors.New("event store: snapshot not found")
+
+// ErrLockBusy is returned by AcquireLock when a different owner
+// currently holds the lock and the caller either did not wait
+// (wait_timeout_millis == 0) or the wait deadline elapsed.
+var ErrLockBusy = errors.New("event store: lock busy")
+
+// ErrLockNotOwned is returned by ReleaseLock/RefreshLock when the
+// caller's owner_token does not match the current holder (or the
+// lock already expired, for RefreshLock).
+var ErrLockNotOwned = errors.New("event store: lock not owned by caller")
+
+// Lock is the state of a distributed lock, scoped by key. Locks are
+// used for mutual exclusion across replicas (e.g. leader election,
+// serializing a scheduled job) — see Locker.
+type Lock struct {
+	Key        string    `json:"key"`
+	OwnerToken string    `json:"owner_token,omitempty"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Held       bool      `json:"held"`
+}
+
+// Locker is the distributed-lock interface, satisfied by both the
+// HTTP client (mode=esb-server) and the embedded LocalStore
+// (mode=embedded). Locks are scoped by key only — callers wanting a
+// lock per aggregate instance should namespace the key themselves
+// (e.g. "order:"+aggregateID).
+type Locker interface {
+	// AcquireLock acquires the lock, or waits up to waitTimeoutMillis
+	// for it to free up (0 = try-once). Re-acquiring with the same
+	// ownerToken refreshes the TTL instead of failing.
+	AcquireLock(ctx context.Context, key, ownerToken string, ttlSeconds, waitTimeoutMillis int) (Lock, error)
+	// ReleaseLock releases a lock this owner holds. Releasing an
+	// already-expired lock is treated as success.
+	ReleaseLock(ctx context.Context, key, ownerToken string) error
+	// RefreshLock extends the TTL of a lock this owner holds — call
+	// this periodically from a heartbeat goroutine during long-running
+	// work so the lock does not expire mid-task.
+	RefreshLock(ctx context.Context, key, ownerToken string, ttlSeconds int) (Lock, error)
+	// GetLock inspects the current holder/expiry without acquiring.
+	// Held=false with no error means nobody holds the lock.
+	GetLock(ctx context.Context, key string) (Lock, error)
+}
 
 // KVSet stores value under key with the given TTL in seconds.
 func (c *Client) KVSet(ctx context.Context, key, value string, ttlSeconds int) error {
@@ -180,6 +235,63 @@ func (c *Client) KVGet(ctx context.Context, key string) (string, error) {
 // KVDel deletes the entry stored under key.
 func (c *Client) KVDel(ctx context.Context, key string) error {
 	return c.do(ctx, http.MethodDelete, "/kv/"+url.PathEscape(key), nil, nil)
+}
+
+// AcquireLock implements Locker.
+func (c *Client) AcquireLock(ctx context.Context, key, ownerToken string, ttlSeconds, waitTimeoutMillis int) (Lock, error) {
+	body := map[string]any{
+		"key":         key,
+		"owner_token": ownerToken,
+		"ttl_seconds": ttlSeconds,
+	}
+	if waitTimeoutMillis > 0 {
+		body["wait_timeout_millis"] = waitTimeoutMillis
+	}
+	var lock Lock
+	err := c.do(ctx, http.MethodPost, "/locks/acquire", body, &lock)
+	if err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && (he.StatusCode == http.StatusConflict || he.StatusCode == http.StatusRequestTimeout) {
+			return Lock{}, ErrLockBusy
+		}
+		return Lock{}, err
+	}
+	lock.Held = true
+	return lock, nil
+}
+
+// ReleaseLock implements Locker.
+func (c *Client) ReleaseLock(ctx context.Context, key, ownerToken string) error {
+	body := map[string]any{"key": key, "owner_token": ownerToken}
+	err := c.do(ctx, http.MethodPost, "/locks/release", body, nil)
+	var he *HTTPError
+	if errors.As(err, &he) && he.StatusCode == http.StatusConflict {
+		return ErrLockNotOwned
+	}
+	return err
+}
+
+// RefreshLock implements Locker.
+func (c *Client) RefreshLock(ctx context.Context, key, ownerToken string, ttlSeconds int) (Lock, error) {
+	body := map[string]any{"key": key, "owner_token": ownerToken, "ttl_seconds": ttlSeconds}
+	var lock Lock
+	err := c.do(ctx, http.MethodPost, "/locks/refresh", body, &lock)
+	if err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && he.StatusCode == http.StatusConflict {
+			return Lock{}, ErrLockNotOwned
+		}
+		return Lock{}, err
+	}
+	lock.Held = true
+	return lock, nil
+}
+
+// GetLock implements Locker.
+func (c *Client) GetLock(ctx context.Context, key string) (Lock, error) {
+	var lock Lock
+	err := c.do(ctx, http.MethodGet, "/locks/"+url.PathEscape(key), nil, &lock)
+	return lock, err
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
@@ -244,4 +356,6 @@ type EventRepository interface {
 	StoreAtomic(ctx context.Context, e Event, expectedVersion int64) (Event, error)
 	Retrieve(ctx context.Context, aggregateID, aggregateName string, afterVersion int64) ([]Event, error)
 	FetchAll(ctx context.Context, aggregateNames []string, afterID uint, limit int) ([]Event, error)
+	StoreSnapshot(ctx context.Context, aggregateName, aggregateID string, version int64, state json.RawMessage) (Snapshot, error)
+	LatestSnapshot(ctx context.Context, aggregateID, aggregateName string) (Snapshot, error)
 }

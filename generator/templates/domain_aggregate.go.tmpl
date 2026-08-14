@@ -9,7 +9,9 @@ const {{.AggregateNamePascal}}AggregateName = "{{.AggregateNameKebab}}"
 // {{.AggregateNamePascal}}AggregateID returns the aggregate ID for a {{.AggregateNamePascal}}.
 func {{.AggregateNamePascal}}AggregateID(id string) string { return id }
 
-// {{.AggregateNamePascal}} is the aggregate root.
+// {{.AggregateNamePascal}} is the aggregate root. It is JSON-marshaled
+// as-is to build snapshots (see service.{{.AggregateNamePascal}}Service.store),
+// so exported fields added here become part of the snapshot shape.
 type {{.AggregateNamePascal}} struct {
 	AggregateID string
 	Version     int64

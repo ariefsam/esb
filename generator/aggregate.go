@@ -33,6 +33,7 @@ func AddAggregate(aggregateName string) error {
 	}{
 		{"domain_aggregate.go.tmpl", "domain/" + aggregateName + ".go"},
 		{"service.go.tmpl", "service/" + aggregateName + ".go"},
+		{"service_scenario_test.go.tmpl", "service/" + aggregateName + "_scenario_test.go"},
 		{"projection_row.go.tmpl", "projection/" + aggregateName + "_row.go"},
 		{"projection_worker.go.tmpl", "projection/" + aggregateName + "_worker.go"},
 	}

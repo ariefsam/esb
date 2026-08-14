@@ -153,14 +153,15 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := AggregateDetailPage{
-		Kind:     PageAggregateDetail,
-		Project:  model,
-		Name:     resolved,
-		Events:   selected.Events,
-		Handlers: matchingHandlers,
-		Queries:  matchingQueries,
-		Workers:  matchingWorkers,
-		Other:    other,
+		Kind:         PageAggregateDetail,
+		Project:      model,
+		Name:         resolved,
+		Events:       selected.Events,
+		EventDetails: selected.EventDetails,
+		Handlers:     matchingHandlers,
+		Queries:      matchingQueries,
+		Workers:      matchingWorkers,
+		Other:        other,
 	}
 
 	s.renderLayout(w, http.StatusOK, Layout{

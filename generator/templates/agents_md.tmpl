@@ -1,0 +1,89 @@
+# AGENTS.md
+
+This file orients AI coding assistants (Claude, Cursor, Copilot, etc.) working
+in this repository. It was generated once by `esb init` and is not updated
+automatically as the project evolves — treat it as a map, not a spec.
+
+## What this project is
+
+`{{.ModuleName}}` is a Go event-sourcing service scaffolded by
+[esb](https://github.com/ariefsam/esb) (Event Sourcing Boilerplate). Domain
+state is derived by replaying events; a read model (projection) is kept in
+sync separately for queries.
+
+## Structure
+
+- `domain/` — aggregates. Each aggregate has `Apply()` (mutate state from an
+  event), `Replay()` (rebuild state from history), and `Exists()`.
+- `eventstore/` — event store client. `local_store.go` is the embedded SQLite
+  store; `client.go` is the HTTP client for a remote ESB server.
+- `repository/` — adapters implementing `domain.EventRepository` over
+  whichever event store is active (`local_adapter.go` / `eventstore_adapter.go`).
+- `projection/` — read-model DB (GORM), migrations, and query helpers.
+- `server/` — HTTP routes/handlers.
+- `wire/` — manual dependency injection; `wire.go` builds the `App` and picks
+  the event store implementation based on `EVENT_STORE_MODE`.
+- `main.go`, `Makefile`, `.env.example` — entrypoint, build/run tasks, config.
+
+## Codegen markers
+
+Files contain `// esb:inject:<name>` comments (e.g. in `wire/wire.go`,
+`server/routes.go`, `projection/db.go`). The `esb add` CLI inserts generated
+code at these markers. When editing these files by hand, keep the markers
+intact and add new code near them so future `esb add` runs don't conflict.
+
+## Snapshots
+
+Each `service/<aggregate>.go` auto-snapshots the aggregate every
+`<Aggregate>SnapshotInterval` versions (default 100) so `load()` restores
+from the latest snapshot plus only the events after it, instead of
+replaying full history every time. The aggregate struct is JSON-marshaled
+as-is to build the snapshot — see the comment on the aggregate struct in
+`domain/<name>.go` before adding non-serializable fields.
+
+## Distributed locks
+
+`wire.App.Locker` (type `domain.Locker`) gives mutual exclusion across
+replicas — `AcquireLock`/`ReleaseLock`/`RefreshLock`/`GetLock`, keyed by an
+arbitrary string. Use it for leader election, serializing a scheduled job,
+or any "only one instance should do X" need. Errors `domain.ErrLockBusy`
+(someone else holds it) and `domain.ErrLockNotOwned` (your token no longer
+matches, e.g. after expiry) are sentinel-checkable with `errors.Is`. Backed
+by the same store as events (HTTP in esb-server mode, a local `locks`
+SQLite table in embedded mode).
+
+## Testing command methods
+
+Use the `testkit` package + `eventstore.NewFakeStore()` (an in-memory
+`EventRepository` with the same optimistic-concurrency/snapshot semantics as
+the real stores) to test command methods Given-When-Then style, without a
+database:
+
+```go
+testkit.Given(t, repo, domain.OrderAggregateName, "order-1").
+    When(func(ctx context.Context) error { return svc.PlaceOrder(ctx, "order-1", 5000) }).
+    Then(testkit.Event("OrderPlaced", map[string]any{"amount": int64(5000)}))
+```
+
+Each `esb add aggregate` generates a starter `service/<name>_scenario_test.go`
+with a TODO placeholder — replace it once real events/command methods exist.
+
+## Event store modes
+
+Set via `EVENT_STORE_MODE` in `.env`:
+
+- `embedded` (default) — local SQLite, no external service required.
+- `esb-server` — remote HTTP event store; requires `ESB_URL` and a signing
+  key from `make keygen`.
+
+`make migrate-to-esb` moves events from embedded to a remote server.
+
+## Extending this project
+
+This project is meant to be extended using the `esb` CLI (`esb add
+aggregate|event|handler ...`), not by hand-rolling the same boilerplate.
+
+**Run `esb --help` and `esb <command> --help` for the authoritative,
+up-to-date usage** — available commands and flags may have changed since
+this file was generated. If `esb` isn't installed, run
+`go install github.com/ariefsam/esb@latest`.

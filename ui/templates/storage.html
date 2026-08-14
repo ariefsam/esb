@@ -31,6 +31,26 @@
         <span class="muted">(file belum ada atau tidak bisa dibuka)</span>
       {{end}}
     </dd>
+    {{if .HasSQLite}}
+    <dt>Total snapshots</dt>
+    <dd>
+      {{if .TotalSnapshots}}
+        {{.TotalSnapshots}} snapshot tersimpan
+      {{else}}
+        <span class="muted">Belum ada snapshot (dibuat otomatis tiap N event per aggregate)</span>
+      {{end}}
+    </dd>
+    {{end}}
+    {{if eq .Mode "embedded"}}
+    <dt>Locks held</dt>
+    <dd>
+      {{if .HeldLockCount}}
+        {{.HeldLockCount}} lock sedang dipegang
+      {{else}}
+        <span class="muted">Tidak ada lock aktif</span>
+      {{end}}
+    </dd>
+    {{end}}
     {{if .MigrationDirection}}
     <dt>Last migration</dt>
     <dd>
@@ -47,18 +67,43 @@
   <p class="muted">Belum ada event tersimpan.</p>
   {{else}}
   <table>
-    <thead><tr><th>Aggregate</th><th>Events</th></tr></thead>
+    <thead><tr><th>Aggregate</th><th>Events</th><th>Snapshots</th></tr></thead>
     <tbody>
       {{range .Rows}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td>{{.Count}}</td>
+        <td>{{.SnapshotCount}}</td>
       </tr>
       {{end}}
     </tbody>
   </table>
   {{end}}
 </section>
+
+{{if eq .Mode "embedded"}}
+<section>
+  <h2>Distributed locks</h2>
+  <p class="muted">Isi tabel <code>locks</code> lokal — dipakai untuk mutual exclusion (mis. leader election) via <code>app.Locker</code>. Row expired tidak otomatis dihapus, cuma berhenti dianggap held.</p>
+  {{if not .Locks}}
+  <p class="muted">Belum ada lock yang pernah diacquire.</p>
+  {{else}}
+  <table>
+    <thead><tr><th>Key</th><th>Owner token</th><th>Expires at</th><th>Status</th></tr></thead>
+    <tbody>
+      {{range .Locks}}
+      <tr>
+        <td><code>{{.Key}}</code></td>
+        <td><code>{{.OwnerToken}}</code></td>
+        <td>{{.ExpiresAt}}</td>
+        <td>{{if .Held}}<span class="badge">held</span>{{else}}<span class="muted">expired</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+</section>
+{{end}}
 
 <section>
   <h2>Pindah mode</h2>

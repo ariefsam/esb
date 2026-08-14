@@ -6,10 +6,26 @@
 
 <section>
   <h2>Events</h2>
-  {{if .Events}}
-  <ul class="chips">
-    {{range .Events}}<li>{{.}}</li>{{end}}
-  </ul>
+  {{if .EventDetails}}
+  {{range .EventDetails}}
+  <h3><code>{{.Name}}</code></h3>
+  {{if .Fields}}
+  <table>
+    <thead><tr><th>Field</th><th>Type</th><th>JSON</th></tr></thead>
+    <tbody>
+      {{range .Fields}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td><code>{{.Type}}</code></td>
+        <td><code>{{.JSONTag}}</code></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">Field tidak terdeteksi — event ini ditemukan lewat Apply() case, bukan struct hasil <code>esb add event</code>.</p>
+  {{end}}
+  {{end}}
   {{else}}
   <p class="muted">(0 events)</p>
   {{end}}

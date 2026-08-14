@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -43,12 +44,30 @@ type StorageInfo struct {
 	// the embedded SQLite file when mode == embedded and the file
 	// exists. Counts is nil otherwise.
 	Counts map[string]int
+	// SnapshotCounts maps aggregate_name -> snapshot row count, same
+	// scope/lifetime rules as Counts. A project generated before
+	// snapshot support existed simply has no "snapshots" table yet —
+	// that surfaces as an empty map, not an error.
+	SnapshotCounts map[string]int
+	// Locks lists the rows currently in the embedded "locks" table
+	// (both held and expired-but-not-yet-cleaned-up), sorted by key.
+	// Only populated in embedded mode — esb-server mode exposes no
+	// "list all locks" endpoint, only per-key lookups.
+	Locks []LockInfo
 	// HasSQLite reports whether the embedded SQLite file was
 	// opened successfully. When false, Counts is nil even if the
 	// DSN points somewhere — a useful signal for the UI so the
 	// page can render "no events yet" instead of pretending the
 	// table exists.
 	HasSQLite bool
+}
+
+// LockInfo describes one row from the embedded "locks" table.
+type LockInfo struct {
+	Key        string
+	OwnerToken string
+	ExpiresAt  time.Time
+	Held       bool // false when ExpiresAt is in the past
 }
 
 // Storage exposes the storage mode + per-aggregate event counts for
@@ -102,6 +121,12 @@ func ScanStorage(rootDir string) StorageInfo {
 		if ok {
 			info.Counts = counts
 			info.HasSQLite = true
+		}
+		if snapCounts, ok := scanSQLiteTableCounts(info.DSN, "snapshots"); ok {
+			info.SnapshotCounts = snapCounts
+		}
+		if locks, ok := scanSQLiteLocks(info.DSN); ok {
+			info.Locks = locks
 		}
 	}
 	return info
@@ -164,6 +189,15 @@ func normalizeStorageMode(mode string) string {
 // returns ok=false when the file is missing, corrupt, or has no
 // events table — the inspector never treats this as fatal.
 func scanSQLiteCounts(dsn string) (map[string]int, bool) {
+	return scanSQLiteTableCounts(dsn, "events")
+}
+
+// scanSQLiteTableCounts opens dsn in read-only mode and returns
+// count(*) per aggregate_name from the given table. ok=false when
+// the file is missing, corrupt, or the table does not exist yet
+// (e.g. "snapshots" on a project generated before snapshot support,
+// or before its first snapshot write) — never treated as fatal.
+func scanSQLiteTableCounts(dsn, table string) (map[string]int, bool) {
 	// file::...?mode=ro opens the database read-only. _pragma=query
 	// turns off the journal — harmless for read-only access and
 	// ensures the file is not locked when another process (the
@@ -182,7 +216,7 @@ func scanSQLiteCounts(dsn string) (map[string]int, bool) {
 		return nil, false
 	}
 
-	rows, err := db.Query("SELECT aggregate_name, COUNT(*) FROM events GROUP BY aggregate_name")
+	rows, err := db.Query(fmt.Sprintf("SELECT aggregate_name, COUNT(*) FROM %s GROUP BY aggregate_name", table))
 	if err != nil {
 		return nil, false
 	}
@@ -196,6 +230,54 @@ func scanSQLiteCounts(dsn string) (map[string]int, bool) {
 			return nil, false
 		}
 		out[name] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// scanSQLiteLocks opens dsn in read-only mode and returns every row
+// in the "locks" table, sorted by key. ok=false when the file is
+// missing, corrupt, or has no locks table yet (e.g. a project
+// generated before lock support existed, or before its first
+// AcquireLock call) — never treated as fatal.
+func scanSQLiteLocks(dsn string) ([]LockInfo, bool) {
+	dsnRO := dsn + "?mode=ro"
+	if strings.Contains(dsn, "?") {
+		dsnRO = dsn + "&mode=ro"
+	}
+	db, err := sql.Open("sqlite", dsnRO)
+	if err != nil {
+		return nil, false
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		return nil, false
+	}
+
+	rows, err := db.Query("SELECT key, owner_token, expires_at FROM locks ORDER BY key ASC")
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var out []LockInfo
+	for rows.Next() {
+		var key, owner string
+		var expiresAtMillis int64
+		if err := rows.Scan(&key, &owner, &expiresAtMillis); err != nil {
+			return nil, false
+		}
+		expiresAt := time.UnixMilli(expiresAtMillis)
+		out = append(out, LockInfo{
+			Key:        key,
+			OwnerToken: owner,
+			ExpiresAt:  expiresAt,
+			Held:       expiresAt.After(now),
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false
@@ -228,6 +310,28 @@ func (s StorageInfo) TotalEvents() int {
 	return total
 }
 
+// TotalSnapshots sums SnapshotCounts into a single number for the
+// dashboard card. Returns 0 when no snapshots have been taken yet.
+func (s StorageInfo) TotalSnapshots() int {
+	total := 0
+	for _, c := range s.SnapshotCounts {
+		total += c
+	}
+	return total
+}
+
+// HeldLockCount returns how many rows in Locks are currently held
+// (not expired). Expired-but-not-yet-cleaned-up rows are excluded.
+func (s StorageInfo) HeldLockCount() int {
+	held := 0
+	for _, l := range s.Locks {
+		if l.Held {
+			held++
+		}
+	}
+	return held
+}
+
 // String renders a one-line summary suitable for the inspector's
 // CLI output. Keep it stable — the snapshot golden file pins the
 // exact wording.
@@ -245,7 +349,14 @@ func (s StorageInfo) String() string {
 		if !s.HasSQLite {
 			return fmt.Sprintf("event store: %s -> %s (file belum ada)", s.Mode, s.DSN)
 		}
-		return fmt.Sprintf("event store: %s -> %s, %d events across %d aggregates",
+		summary := fmt.Sprintf("event store: %s -> %s, %d events across %d aggregates",
 			s.Mode, s.DSN, s.TotalEvents(), len(s.Counts))
+		if total := s.TotalSnapshots(); total > 0 {
+			summary += fmt.Sprintf(", %d snapshots", total)
+		}
+		if held := s.HeldLockCount(); held > 0 {
+			summary += fmt.Sprintf(", %d locks held", held)
+		}
+		return summary
 	}
 }
