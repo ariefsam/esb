@@ -56,6 +56,7 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("listen %s: %w", uiAddr, err)
 		}
+		warnIfNonLoopback(ln.Addr())
 
 		httpSrv := &http.Server{
 			Handler:           srv.Handler(),
@@ -107,4 +108,23 @@ Examples:
 func init() {
 	uiCmd.Flags().StringVar(&uiAddr, "addr", "127.0.0.1:8787", "address to bind the UI to (host:port)")
 	uiCmd.Flags().BoolVar(&uiNoOpen, "no-open", false, "do not print the local URL after start")
+}
+
+// warnIfNonLoopback prints a prominent warning when the UI is bound to a
+// non-loopback address. The UI has no authentication — its only network
+// protection is binding to localhost plus an Origin check (anti-CSRF, not
+// auth). Exposing it on 0.0.0.0 or a LAN IP hands anyone who can reach the
+// port the ability to run the allow-listed esb commands against the project.
+func warnIfNonLoopback(addr net.Addr) {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok || tcp.IP.IsLoopback() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, `
+WARNING: esb ui is bound to a non-loopback address (%s).
+The UI has NO authentication; anyone who can reach this address can run
+esb commands against this project. Bind to 127.0.0.1 unless you fully
+trust the network.
+
+`, tcp.String())
 }

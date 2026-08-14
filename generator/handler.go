@@ -9,6 +9,12 @@ import (
 
 // AddHandler generates an HTTP handler skeleton and updates routes + wire.
 func AddHandler(handlerName, aggregateName string) error {
+	if err := validateSnakeName("handler name", handlerName); err != nil {
+		return err
+	}
+	if err := validateSnakeName("aggregate name", aggregateName); err != nil {
+		return err
+	}
 	moduleName, err := ReadModuleName()
 	if err != nil {
 		return err

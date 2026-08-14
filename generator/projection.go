@@ -10,6 +10,17 @@ import (
 
 // AddProjection generates a multi-aggregate projection worker.
 func AddProjection(projectionName string, aggregateNames []string) error {
+	if err := validateSnakeName("projection name", projectionName); err != nil {
+		return err
+	}
+	if len(aggregateNames) == 0 {
+		return fmt.Errorf("projection %q needs at least one aggregate", projectionName)
+	}
+	for _, a := range aggregateNames {
+		if err := validateSnakeName("aggregate name", a); err != nil {
+			return err
+		}
+	}
 	moduleName, err := ReadModuleName()
 	if err != nil {
 		return err

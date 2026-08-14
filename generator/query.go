@@ -9,6 +9,12 @@ import (
 
 // AddQuery injects a new query function into projection/query.go.
 func AddQuery(queryName, aggregateName string) error {
+	if err := validateSnakeName("query name", queryName); err != nil {
+		return err
+	}
+	if err := validateSnakeName("aggregate name", aggregateName); err != nil {
+		return err
+	}
 	moduleName, err := ReadModuleName()
 	if err != nil {
 		return err

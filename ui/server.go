@@ -132,11 +132,21 @@ func logMiddleware(next http.Handler) http.Handler {
 // no-store keeps intermediate caches from holding the /commands/runs
 // stream — a shared proxy caching a run-id response would otherwise
 // replay a finished run as if it were still in progress.
+//
+// The CSP is deliberately strict: every asset (CSS, JS) is embedded and
+// served from /static, and the templates carry no inline <script>,
+// <style>, or on*= handlers, so default-src 'self' locks the page to
+// its own origin with nothing to relax. Combined with
+// X-Frame-Options: DENY this closes the clickjacking vector the
+// assessment flagged for the local admin UI.
 func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Cache-Control", "no-store")
+		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
 }

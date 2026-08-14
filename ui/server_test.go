@@ -646,6 +646,12 @@ func TestSecurityHeaders_NoSniff_NoCacheBypass(t *testing.T) {
 		if got := resp.Header.Get("Cache-Control"); got == "" {
 			t.Errorf("%s %s: Cache-Control missing (got empty)", p.method, p.path)
 		}
+		if got := resp.Header.Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'self'") {
+			t.Errorf("%s %s: CSP = %q, want default-src 'self'", p.method, p.path, got)
+		}
+		if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s %s: X-Frame-Options = %q, want DENY", p.method, p.path, got)
+		}
 	}
 }
 

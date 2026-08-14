@@ -11,6 +11,9 @@ import (
 // AddAggregate generates domain/service/projection files for a new aggregate
 // and updates projection/db.go, wire/wire.go, and main.go.
 func AddAggregate(aggregateName string) error {
+	if err := validateSnakeName("aggregate name", aggregateName); err != nil {
+		return err
+	}
 	moduleName, err := ReadModuleName()
 	if err != nil {
 		return err

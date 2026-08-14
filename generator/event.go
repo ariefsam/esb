@@ -20,6 +20,9 @@ func ParseFields(args []string) ([]FieldDef, error) {
 			return nil, fmt.Errorf("invalid field %q — expected name:type", arg)
 		}
 		fieldName, typ := parts[0], parts[1]
+		if err := validateSnakeName("field name", fieldName); err != nil {
+			return nil, err
+		}
 		if !validType(typ) {
 			return nil, fmt.Errorf("unsupported type %q for field %q — use string, int64, float64, or bool", typ, fieldName)
 		}
@@ -77,6 +80,12 @@ func lcFirst(s string) string {
 // AddEvent injects a new event struct, Apply() case, constructor, and
 // projection worker case into the existing aggregate files.
 func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
+	if err := validateSnakeName("aggregate name", aggregateName); err != nil {
+		return err
+	}
+	if err := validatePascalName("event name", eventName); err != nil {
+		return err
+	}
 	moduleName, err := ReadModuleName()
 	if err != nil {
 		return err

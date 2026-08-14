@@ -531,10 +531,12 @@ func (ExecRunner) Run(ctx context.Context, projectRoot string, argv []string, st
 // surfaces this as RunTimedOut rather than a generic failure.
 var ErrTimeout = errors.New("command exceeded timeout")
 
-// runStoreCap bounds the number of runs kept in memory. When the
-// store reaches this size Start rejects the new run with ErrStoreFull
-// so a runaway tab cannot exhaust process memory. The value matches
-// the number locked in by Phase 1 of the approved plan.
+// runStoreCap bounds the number of runs kept in memory. When the store
+// reaches this size Start evicts the oldest *completed* run to make room
+// so a long-lived `esb ui` session isn't permanently locked out after
+// runStoreCap executions (the assessment's RunStore-never-evicts finding).
+// Eviction never touches the single in-flight run, so history is bounded
+// without ever discarding a run the UI is actively streaming.
 const runStoreCap = 1000
 
 // RunStore keeps the in-memory map of run id -> *Run. Only one run may
@@ -611,8 +613,13 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 		return nil, ErrConflict
 	}
 	if len(s.runs) >= runStoreCap {
-		s.mu.Unlock()
-		return nil, ErrStoreFull
+		if !s.evictOldestCompletedLocked() {
+			// Every slot is an in-flight run — impossible under the
+			// single-active invariant, but fail safe rather than grow
+			// unbounded.
+			s.mu.Unlock()
+			return nil, ErrStoreFull
+		}
 	}
 	s.active = true
 	run := &Run{
@@ -629,6 +636,27 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 
 	go s.execute(parent, run, runner)
 	return run, nil
+}
+
+// evictOldestCompletedLocked removes the oldest run whose status is no
+// longer RunRunning and reports whether one was evicted. The caller must
+// hold s.mu. It is O(n) but only runs when the store is at capacity.
+func (s *RunStore) evictOldestCompletedLocked() bool {
+	var oldestID string
+	var oldestAt time.Time
+	for id, r := range s.runs {
+		if r.Status == RunRunning {
+			continue
+		}
+		if oldestID == "" || r.StartedAt.Before(oldestAt) {
+			oldestID, oldestAt = id, r.StartedAt
+		}
+	}
+	if oldestID == "" {
+		return false
+	}
+	delete(s.runs, oldestID)
+	return true
 }
 
 // ErrConflict signals that the UI rejected a second run while one is
