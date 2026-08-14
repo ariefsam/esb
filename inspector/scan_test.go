@@ -412,18 +412,17 @@ func (w *BalanceProjectionWorker) applyEvent(_ interface{}, e eventstore.Event) 
 	}
 }
 
-// TestScan_ExtractEventsIgnoresLaterCasesWithIndentedCloseBrace guards
-// against the bug where Apply() detection exited on an unindented `}`.
-// A non-gofmt Apply with an indented closing brace used to leave
-// inApply enabled, so case statements in unrelated functions were
-// reported as events.
-func TestScan_ExtractEventsIgnoresLaterCasesWithIndentedCloseBrace(t *testing.T) {
+// TestScan_ExtractEventsOnlyCountsApplyCases verifies that only case values
+// inside an Apply() method are treated as events. A `case` in an unrelated
+// method's switch must not leak in. (Under the AST-based scanner, events come
+// from FuncDecls named Apply — never from other functions — so this is a
+// structural guarantee rather than brace bookkeeping.)
+func TestScan_ExtractEventsOnlyCountsApplyCases(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 	mkDir(t, dir, "domain")
-	// Intentionally non-gofmt: closing brace of Apply is indented.
 	if err := os.WriteFile(filepath.Join(dir, "domain", "order.go"), []byte(`package domain
 
 const OrderAggregateName = "order"
@@ -432,12 +431,17 @@ func (o *Order) Apply(eventName string, data []byte) error {
 	switch eventName {
 	case "OrderPlaced":
 		return nil
+	default:
+		return nil
 	}
-	}
+}
 
-func (o *Order) SomeOtherFunction() {
+func (o *Order) SomeOtherFunction() error {
+	switch "x" {
 	case "PhantomEvent":
-		_ = 0
+		return nil
+	}
+	return nil
 }
 `), 0644); err != nil {
 		t.Fatalf("write domain/order.go: %v", err)

@@ -86,8 +86,15 @@ func TestGolden_InspectorParsesGeneratorOutput(t *testing.T) {
 	// --- multi-aggregate projection ---
 	if p := findProjection(m, "sales_report"); p == nil {
 		t.Errorf("inspector did not find projection sales_report; projections = %+v", m.Projection)
-	} else if !p.Multi {
-		t.Errorf("projection sales_report Multi = false, want true")
+	} else {
+		if !p.Multi {
+			t.Errorf("projection sales_report Multi = false, want true")
+		}
+		// The generated var is `sales_reportAggregateNames` — a multi-word
+		// (underscored) name that must still bind to its own aggregate list.
+		if !slices.Equal(p.Aggregates, []string{"order", "product"}) {
+			t.Errorf("sales_report aggregates = %v, want [order product]", p.Aggregates)
+		}
 	}
 }
 
