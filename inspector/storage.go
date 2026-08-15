@@ -49,6 +49,11 @@ type StorageInfo struct {
 	// snapshot support existed simply has no "snapshots" table yet —
 	// that surfaces as an empty map, not an error.
 	SnapshotCounts map[string]int
+	// EventCounts maps aggregate_name -> event_name -> stored row count,
+	// populated from the embedded SQLite file (embedded mode only). Used
+	// to warn before deleting an event definition whose events already
+	// exist in history. Nil in esb-server mode or when the file is absent.
+	EventCounts map[string]map[string]int
 	// Locks lists the rows currently in the embedded "locks" table
 	// (both held and expired-but-not-yet-cleaned-up), sorted by key.
 	// Only populated in embedded mode — esb-server mode exposes no
@@ -124,6 +129,9 @@ func ScanStorage(rootDir string) StorageInfo {
 		}
 		if snapCounts, ok := scanSQLiteTableCounts(info.DSN, "snapshots"); ok {
 			info.SnapshotCounts = snapCounts
+		}
+		if eventCounts, ok := scanSQLiteEventNameCounts(info.DSN); ok {
+			info.EventCounts = eventCounts
 		}
 		if locks, ok := scanSQLiteLocks(info.DSN); ok {
 			info.Locks = locks
@@ -235,6 +243,57 @@ func scanSQLiteTableCounts(dsn, table string) (map[string]int, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// scanSQLiteEventNameCounts opens dsn read-only and returns, per
+// aggregate_name, the count of stored rows per event_name. ok=false when the
+// file is missing, corrupt, or has no events table yet — never treated as fatal.
+func scanSQLiteEventNameCounts(dsn string) (map[string]map[string]int, bool) {
+	dsnRO := dsn + "?mode=ro"
+	if strings.Contains(dsn, "?") {
+		dsnRO = dsn + "&mode=ro"
+	}
+	db, err := sql.Open("sqlite", dsnRO)
+	if err != nil {
+		return nil, false
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		return nil, false
+	}
+
+	rows, err := db.Query("SELECT aggregate_name, event_name, COUNT(*) FROM events GROUP BY aggregate_name, event_name")
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+
+	out := map[string]map[string]int{}
+	for rows.Next() {
+		var agg, event string
+		var count int
+		if err := rows.Scan(&agg, &event, &count); err != nil {
+			return nil, false
+		}
+		if out[agg] == nil {
+			out[agg] = map[string]int{}
+		}
+		out[agg][event] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// EventCount returns how many rows are stored for (aggregateName, eventName)
+// in embedded mode, or 0 when unknown (esb-server mode, no SQLite, or none).
+func (s StorageInfo) EventCount(aggregateName, eventName string) int {
+	if s.EventCounts == nil {
+		return 0
+	}
+	return s.EventCounts[aggregateName][eventName]
 }
 
 // scanSQLiteLocks opens dsn in read-only mode and returns every row
