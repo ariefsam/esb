@@ -1,0 +1,30 @@
+package projection
+
+// {{.NamePascal}}BalanceRow is the current-balance read model for a
+// {{.NamePascal}} account.
+type {{.NamePascal}}BalanceRow struct {
+	AggregateID string `gorm:"primaryKey" json:"aggregate_id"`
+	Currency    string `gorm:"column:currency" json:"currency"`
+	Balance     int64  `gorm:"column:balance;not null;default:0" json:"balance"`
+	Frozen      bool   `gorm:"column:frozen;not null;default:false" json:"frozen"`
+	Closed      bool   `gorm:"column:closed;not null;default:false" json:"closed"`
+	Version     int64  `gorm:"not null;default:0" json:"version"`
+	UpdatedAt   int64  `gorm:"not null;default:0" json:"updated_at"`
+}
+
+func ({{.NamePascal}}BalanceRow) TableName() string { return "{{.TableName}}" }
+
+// {{.NamePascal}}EntryRow is one append-only ledger line (the statement). The
+// unique EventID makes the projection idempotent: re-applying a source event
+// never double-posts.
+type {{.NamePascal}}EntryRow struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	EventID     uint   `gorm:"uniqueIndex" json:"event_id"`
+	AggregateID string `gorm:"index;column:aggregate_id" json:"aggregate_id"`
+	Kind        string `gorm:"column:kind" json:"kind"`
+	Amount      int64  `gorm:"column:amount" json:"amount"`
+	Ref         string `gorm:"column:ref" json:"ref"`
+	At          int64  `gorm:"column:at" json:"at"`
+}
+
+func ({{.NamePascal}}EntryRow) TableName() string { return "{{.EntryTableName}}" }

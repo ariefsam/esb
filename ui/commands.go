@@ -119,6 +119,16 @@ var catalog = []CatalogEntry{
 		Build:   buildAddRecipeCRUD,
 	},
 	{
+		ID:          "add-recipe-ledger",
+		Label:       "Add ledger recipe",
+		Description: "Scaffold an append-only ledger account: Open/Deposit/Withdraw/Freeze/Close with a non-negative-balance invariant, statement journal, and tests. snake_case name.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "account", Required: true, Type: "text", Help: "snake_case account name"},
+		},
+		Preview: []string{"esb", "add", "recipe", "ledger", "account"},
+		Build:   buildAddRecipeLedger,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -321,6 +331,17 @@ func buildAddRecipeCRUD(form FormInput) ([]string, error) {
 	argv := []string{"esb", "add", "recipe", "crud", name}
 	argv = append(argv, fields...)
 	return argv, nil
+}
+
+func buildAddRecipeLedger(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	return []string{"esb", "add", "recipe", "ledger", name}, nil
 }
 
 func buildShow(form FormInput) ([]string, error) {

@@ -234,7 +234,10 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
    filter file non-handler seperti `response.go`).
 
 **Fase 2 — blueprint domain klasik.**
-4. **Ledger/bank** (invariant + concurrency test).
+4. ✅ **Ledger/bank** (`esb add recipe ledger <name>`): Open/Deposit/Withdraw/
+   Freeze/Close, invariant saldo non-negatif (uang int64 minor unit), balance
+   read model + statement journal idempoten, query balance/statement, handler,
+   dan scenario test termasuk **concurrency no-double-spend** (lolos `-race`).
 5. **State machine** (transisi + guard).
 
 **Fase 3 — lintas-aggregate & evolusi.**

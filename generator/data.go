@@ -77,6 +77,20 @@ type CRUDData struct {
 	Fields      []CRUDField
 }
 
+// LedgerData is passed to the ledger recipe templates. A ledger has a fixed
+// event shape (Opened/Deposited/Withdrawn/Frozen/Closed), so unlike CRUD it
+// takes no user-defined fields.
+type LedgerData struct {
+	ModuleName     string
+	PackageName    string
+	Name           string // snake_case: "account"
+	NamePascal     string // PascalCase: "Account"
+	NameKebab      string // kebab-case aggregate-store name: "account"
+	Receiver       string // Go receiver variable: "a"
+	TableName      string // balance table: "accounts"
+	EntryTableName string // statement table: "account_entries"
+}
+
 // QueryData is passed to add-query templates.
 type QueryData struct {
 	ModuleName          string

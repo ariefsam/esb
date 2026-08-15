@@ -16,12 +16,39 @@ pattern instead of a single component. Everything is written in one atomic
 step — if any part fails, nothing is written.
 
 Available recipes:
-  crud <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
+  crud   <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
+  ledger <name>                    append-only account: Open/Deposit/Withdraw/Freeze/Close
 
 Examples:
   esb add recipe crud product name:string price:int64 sku:string
-  esb add recipe crud customer email:string display_name:string`,
+  esb add recipe ledger account`,
 	Args: cobra.MinimumNArgs(1),
+}
+
+var addRecipeLedgerCmd = &cobra.Command{
+	Use:   "ledger <name>",
+	Short: "Ledger account: Open/Deposit/Withdraw/Freeze/Close with a non-negative-balance invariant",
+	Long: `Generates a double-entry-style ledger account aggregate:
+
+  - domain aggregate + Opened/Deposited/Withdrawn/Frozen/Closed events
+  - service with Open/Deposit/Withdraw/Freeze/Close commands, enforcing a
+    non-negative balance (money is int64 minor units, never float)
+  - balance read model + append-only statement journal (idempotent projection)
+  - Get<Name>Balance / List<Name>Entries queries
+  - write-side HTTP handlers
+  - Given-When-Then scenario tests, including a concurrent no-double-spend test
+
+Name must be snake_case.
+
+Examples:
+  esb add recipe ledger account
+  esb add recipe ledger wallet`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		fmt.Printf("Scaffolding ledger recipe: %s\n\n", name)
+		return generator.AddLedger(name)
+	},
 }
 
 var addRecipeCRUDCmd = &cobra.Command{
@@ -56,4 +83,5 @@ Examples:
 
 func init() {
 	addRecipeCmd.AddCommand(addRecipeCRUDCmd)
+	addRecipeCmd.AddCommand(addRecipeLedgerCmd)
 }

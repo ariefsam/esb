@@ -88,15 +88,12 @@ func AddCRUD(name string, fields []FieldDef) error {
 	return nil
 }
 
-// wireCRUD injects the projection worker, service, and handler into the
-// existing wire/db/main files — the union of what `add aggregate` and
-// `add handler` wire, staged into the recipe's transaction.
+// wireCRUD injects the read-model row AutoMigrate plus the projection worker,
+// service, handler, and route hints for a CRUD slice into the existing
+// wire/db/main files, staged into the recipe's transaction.
 func wireCRUD(tx *injector.Tx, moduleName string, data CRUDData, actions *[]string) error {
 	pascal := data.NamePascal
-	lower := lcFirst(pascal)
-	workerType := pascal + "ProjectionWorker"
 	handlerType := pascal + "Handler"
-	svcVar := lower + "Svc"
 
 	// projection/db.go — AutoMigrate the read-model row.
 	if ok, err := tx.Contains("projection/db.go", pascal+"Row{}"); err != nil {
@@ -108,71 +105,15 @@ func wireCRUD(tx *injector.Tx, moduleName string, data CRUDData, actions *[]stri
 		*actions = append(*actions, "  update  projection/db.go")
 	}
 
-	// wire/wire.go — imports for the handler and service packages.
-	if err := tx.EnsureImport("wire/wire.go", moduleName+"/server/handler"); err != nil {
+	// Shared wiring: service instance + projection worker + write-side handler.
+	if err := wireAggregateSlice(tx, moduleName, pascal, actions); err != nil {
 		return err
-	}
-	if err := tx.EnsureImport("wire/wire.go", moduleName+"/service"); err != nil {
-		return err
-	}
-
-	// Service instance (at the app-services marker, above app-init).
-	if ok, err := tx.Contains("wire/wire.go", svcVar+" :="); err != nil {
-		return err
-	} else if !ok {
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", "\t"+svcVar+" := service.New"+pascal+"Service(eventRepo)"); err != nil {
-			return err
-		}
-	}
-
-	// Projection worker (field + init + return).
-	if ok, err := tx.Contains("wire/wire.go", workerType); err != nil {
-		return err
-	} else if !ok {
-		workerVar := lower + "Worker"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+workerType+" *projection."+workerType); err != nil {
-			return err
-		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+workerVar+" := projection.New"+workerType+"(esClient, db)"); err != nil {
-			return err
-		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+workerType+": "+workerVar+","); err != nil {
-			return err
-		}
-	}
-
-	// Write-side handler (field + init + return).
-	if ok, err := tx.Contains("wire/wire.go", handlerType); err != nil {
-		return err
-	} else if !ok {
-		handlerVar := lower + "Handler"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+handlerType+" *handler."+handlerType); err != nil {
-			return err
-		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+handlerVar+" := handler.New"+handlerType+"("+svcVar+")"); err != nil {
-			return err
-		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+handlerType+": "+handlerVar+","); err != nil {
-			return err
-		}
-	}
-	*actions = append(*actions, "  update  wire/wire.go")
-
-	// main.go — start the projection worker.
-	if ok, err := tx.Contains("main.go", workerType); err != nil {
-		return err
-	} else if !ok {
-		if err := tx.InjectAfterMarker("main.go", "// esb:inject:projection-workers", "\t\tapp."+workerType+","); err != nil {
-			return err
-		}
-		*actions = append(*actions, "  update  main.go")
 	}
 
 	// server/routes.go — leave route hints for the write commands.
-	kebab := data.NameKebab
 	for _, cmd := range []string{"create", "update", "archive"} {
 		method := naming.ToPascalCase(cmd)
-		route := "\t// TODO: router.HandleFunc(\"/" + kebab + "/" + cmd + "\", app." + handlerType + "." + method + ").Methods(http.MethodPost)"
+		route := "\t// TODO: router.HandleFunc(\"/" + data.NameKebab + "/" + cmd + "\", app." + handlerType + "." + method + ").Methods(http.MethodPost)"
 		if ok, err := tx.Contains("server/routes.go", handlerType+"."+method); err != nil {
 			return err
 		} else if !ok {

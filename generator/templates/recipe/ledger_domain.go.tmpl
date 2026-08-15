@@ -1,0 +1,101 @@
+package domain
+
+import "encoding/json"
+
+const {{.NamePascal}}AggregateName = "{{.NameKebab}}"
+
+// {{.NamePascal}}AggregateID returns the aggregate ID for a {{.NamePascal}}.
+func {{.NamePascal}}AggregateID(id string) string { return id }
+
+// {{.NamePascal}} is an append-only ledger account. Balance is stored in the
+// smallest currency unit (e.g. cents) as an int64 — never a float — so money
+// arithmetic is exact.
+type {{.NamePascal}} struct {
+	AggregateID string
+	Version     int64
+	Currency    string
+	Balance     int64
+	Frozen      bool
+	Closed      bool
+}
+
+// New{{.NamePascal}} returns an empty aggregate ready for Replay.
+func New{{.NamePascal}}() *{{.NamePascal}} { return &{{.NamePascal}}{} }
+
+// Apply mutates aggregate state for a single event.
+func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessage) error {
+	switch eventName {
+	case "{{.NamePascal}}Opened":
+		var e {{.NamePascal}}Opened
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+		{{.Receiver}}.Currency = e.Currency
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Deposited":
+		var e {{.NamePascal}}Deposited
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+		{{.Receiver}}.Balance += e.Amount
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Withdrawn":
+		var e {{.NamePascal}}Withdrawn
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+		{{.Receiver}}.Balance -= e.Amount
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Frozen":
+		{{.Receiver}}.Frozen = true
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Closed":
+		{{.Receiver}}.Closed = true
+		{{.Receiver}}.Version++
+		return nil
+	default:
+		return nil
+	}
+}
+
+// Replay rebuilds aggregate state by replaying events from the store.
+func ({{.Receiver}} *{{.NamePascal}}) Replay(events []Event) error {
+	for _, e := range events {
+		if err := {{.Receiver}}.Apply(e.EventName, e.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Exists reports whether the account has been opened and not closed.
+func ({{.Receiver}} *{{.NamePascal}}) Exists() bool {
+	return {{.Receiver}}.Version > 0 && !{{.Receiver}}.Closed
+}
+
+// {{.NamePascal}}Opened event.
+type {{.NamePascal}}Opened struct {
+	Currency string `json:"currency"`
+}
+
+// {{.NamePascal}}Deposited event.
+type {{.NamePascal}}Deposited struct {
+	Amount int64  `json:"amount"`
+	Ref    string `json:"ref"`
+}
+
+// {{.NamePascal}}Withdrawn event.
+type {{.NamePascal}}Withdrawn struct {
+	Amount int64  `json:"amount"`
+	Ref    string `json:"ref"`
+}
+
+// {{.NamePascal}}Frozen event.
+type {{.NamePascal}}Frozen struct{}
+
+// {{.NamePascal}}Closed event.
+type {{.NamePascal}}Closed struct{}
