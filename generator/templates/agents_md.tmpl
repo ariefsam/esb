@@ -100,6 +100,8 @@ each generates a complete, tested vertical slice in one atomic step:
   from an older shape to the current one on read (schema evolution).
 - `esb add idempotency` — a reusable guard (AlreadyProcessed / Once) so commands
   can be made safe to retry, keyed by an event's IdempotencyKey.
+- `esb delete event <aggregate> <EventName>` — remove an event's code (inverse
+  of add event); does NOT delete stored event data, so check the store first.
 
 **Run `esb --help` and `esb <command> --help` for the authoritative,
 up-to-date usage** — available commands and flags may have changed since

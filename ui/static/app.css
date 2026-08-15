@@ -201,3 +201,20 @@ footer {
   font-size: 13px;
 }
 .cmd-details li { margin: 2px 0; }
+
+/* Aggregate page: add/delete event */
+.event-head { display: flex; align-items: center; gap: 12px; }
+.event-head h3 { margin: 12px 0; }
+.btn-danger-sm {
+  font-size: 12px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #c0392b;
+  text-decoration: none;
+}
+.btn-danger-sm:hover { background: rgba(192,57,43,0.08); }
+button.danger { background: #c0392b; border-color: #c0392b; }
+.btn-cancel { margin-left: 12px; align-self: center; color: var(--fg-mute); text-decoration: none; }
+label.ack { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 12px; max-width: 70ch; }
+label.ack input { margin-top: 3px; }

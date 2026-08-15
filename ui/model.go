@@ -26,6 +26,7 @@ const (
 	PageRunDetail       PageKind = "run_detail"
 	PageStorage         PageKind = "storage"
 	PageMigrate         PageKind = "migrate"
+	PageDeleteEvent     PageKind = "delete_event"
 	PageError           PageKind = "error"
 )
 
@@ -90,7 +91,8 @@ type AggregateRow struct {
 type AggregateDetailPage struct {
 	Kind         PageKind
 	Project      inspector.ProjectModel
-	Name         string
+	Name         string // store name (kebab), shown in the UI + URL
+	FileName     string // snake_case file name, passed to `esb add/delete event`
 	Events       []string
 	EventDetails []inspector.EventDetail
 	Handlers     []inspector.Handler
@@ -107,6 +109,21 @@ type CommandsPage struct {
 	Commands []CommandView // flat list, kept for callers that don't group
 	Error    string        // pre-fill error banner when a previous run was rejected
 	Flash    string
+}
+
+// DeleteEventPage is the confirm screen before removing an event definition.
+// It reports whether the event's rows already exist in the store so the user
+// can be warned before deleting a definition whose events have happened.
+type DeleteEventPage struct {
+	Kind          PageKind
+	AggregateName string // store name (kebab), for display + the count lookup
+	AggregateFile string // file name (snake), passed to `esb delete event`
+	EventName     string
+	Mode          string // storage mode: embedded / esb-server / unknown
+	CanVerify     bool   // true in embedded mode where EventCount is authoritative
+	EventCount    int    // stored rows for this event (embedded only)
+	RequireAck    bool   // count > 0, or cannot verify (esb-server) — force a confirm checkbox
+	Error         string // shown when a POST is rejected (missing ack)
 }
 
 // CommandGroup is a titled section of related commands on the Commands page

@@ -88,13 +88,21 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 // handleAggregate serves /aggregates/{name}. An empty name segment
 // produces a 404, the same way an unknown name does.
 func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/aggregates/"), "/")
+
+	// Delete-event sub-route: <name>/events/<event>/delete. Dispatched here
+	// because the flat mux routes everything under /aggregates/ to this handler.
+	if parts := strings.Split(path, "/"); len(parts) == 4 && parts[1] == "events" && parts[3] == "delete" {
+		s.handleDeleteEvent(w, r, parts[0], parts[2])
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	name := strings.TrimPrefix(r.URL.Path, "/aggregates/")
-	name = strings.Trim(name, "/")
+	name := path
 	if name == "" {
 		s.notFound(w, r, "Aggregate tidak ditentukan", "Pilih aggregate dari overview.")
 		return
@@ -156,6 +164,7 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 		Kind:         PageAggregateDetail,
 		Project:      model,
 		Name:         resolved,
+		FileName:     selected.FileName,
 		Events:       selected.Events,
 		EventDetails: selected.EventDetails,
 		Handlers:     matchingHandlers,
@@ -210,6 +219,104 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 // handleExecute accepts POST /commands/execute. Anything else returns
 // 405; an unknown command, missing fields, or a conflict with an
 // active run surfaces as a 400 page.
+// handleDeleteEvent serves the delete-event confirm page (GET) and, after the
+// stored-data check + confirmation, starts the delete-event run (POST). It is
+// the only entry point for the hidden delete-event command, so the data check
+// cannot be bypassed.
+func (s *Server) handleDeleteEvent(w http.ResponseWriter, r *http.Request, name, event string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	model, err := inspector.Scan(s.projectRoot)
+	if err != nil {
+		s.renderScanError(w, r, err)
+		return
+	}
+	var selected *inspector.Aggregate
+	for i := range model.Aggregate {
+		if model.Aggregate[i].Name == name || model.Aggregate[i].FileName == name {
+			selected = &model.Aggregate[i]
+			break
+		}
+	}
+	if selected == nil {
+		s.notFound(w, r, "Aggregate tidak ditemukan", fmt.Sprintf("Aggregate %q tidak ada.", name))
+		return
+	}
+	known := false
+	for _, e := range selected.Events {
+		if e == event {
+			known = true
+			break
+		}
+	}
+	if !known {
+		s.notFound(w, r, "Event tidak ditemukan", fmt.Sprintf("Event %q tidak ada di aggregate %q.", event, selected.Name))
+		return
+	}
+
+	storage := inspector.ScanStorage(s.projectRoot)
+	// We can only claim a verified count when we actually opened the embedded
+	// events table. No readable DB (esb-server, no .env/DSN, or the store never
+	// ran) means "cannot verify" — never a false "safe".
+	canVerify := storage.Mode == inspector.StorageModeEmbedded && storage.HasSQLite
+	count := storage.EventCount(selected.Name, event)
+	page := DeleteEventPage{
+		Kind:          PageDeleteEvent,
+		AggregateName: selected.Name,
+		AggregateFile: selected.FileName,
+		EventName:     event,
+		Mode:          storage.Mode,
+		CanVerify:     canVerify,
+		EventCount:    count,
+		RequireAck:    (canVerify && count > 0) || !canVerify,
+	}
+
+	if r.Method == http.MethodGet {
+		s.renderDeleteEvent(w, http.StatusOK, page)
+		return
+	}
+
+	// POST: same-origin, confirmation gate, then run the hidden command.
+	if err := checkSameOrigin(r); err != nil {
+		s.badRequest(w, r, err.Error())
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.badRequest(w, r, "Form tidak bisa dibaca: "+err.Error())
+		return
+	}
+	if page.RequireAck && r.Form.Get("ack") != "on" {
+		page.Error = "Centang konfirmasi dulu sebelum menghapus."
+		s.renderDeleteEvent(w, http.StatusBadRequest, page)
+		return
+	}
+
+	form := FormInput{"aggregate": {selected.FileName}, "event": {event}}
+	run, err := s.runs.Start(s.runContext(), s.projectRoot, "delete-event", form, s.runner)
+	if err != nil {
+		if errors.Is(err, ErrConflict) {
+			s.badRequest(w, r, "Command lain sedang berjalan; tunggu selesai lalu coba lagi.")
+			return
+		}
+		s.badRequest(w, r, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/commands/runs/"+run.ID, http.StatusSeeOther)
+}
+
+func (s *Server) renderDeleteEvent(w http.ResponseWriter, status int, page DeleteEventPage) {
+	s.renderLayout(w, status, Layout{
+		Title: "Hapus event " + page.EventName,
+		Root:  s.projectRoot,
+		Body:  s.renderBody(page),
+		Nav:   defaultNav("overview"),
+	})
+}
+
 func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.methodNotAllowed(w, r)
@@ -228,8 +335,8 @@ func (s *Server) handleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	commandID := r.Form.Get("command")
-	if findCommand(commandID) == nil {
-		s.badRequest(w, r, fmt.Sprintf("Command %q tidak ada di allowlist.", commandID))
+	if c := findCommand(commandID); c == nil || c.Hidden {
+		s.badRequest(w, r, fmt.Sprintf("Command %q tidak bisa dijalankan dari sini.", commandID))
 		return
 	}
 

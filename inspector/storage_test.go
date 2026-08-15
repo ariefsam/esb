@@ -194,6 +194,7 @@ func TestScanStorage_ReportsUnknownDBFile(t *testing.T) {
 
 type seedEvent struct {
 	AggregateName string
+	EventName     string // defaults to "TestEvent" when empty
 	Count         int
 }
 
@@ -218,11 +219,15 @@ func seedEventsDB(t *testing.T, dsn string, events []seedEvent) error {
 		return err
 	}
 	for _, e := range events {
+		eventName := e.EventName
+		if eventName == "" {
+			eventName = "TestEvent"
+		}
 		for i := 0; i < e.Count; i++ {
 			if _, err := db.Exec(
 				`INSERT INTO events(aggregate_name, aggregate_id, event_name, version, data)
 				 VALUES (?, ?, ?, ?, ?)`,
-				e.AggregateName, "id-1", "TestEvent", int64(i+1), []byte("{}"),
+				e.AggregateName, "id-1", eventName, int64(i+1), []byte("{}"),
 			); err != nil {
 				return err
 			}
@@ -245,4 +250,46 @@ func sortedEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+func TestScanStorage_EmbeddedEventNameCounts(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "events.db")
+	if err := seedEventsDB(t, dsn, []seedEvent{
+		{AggregateName: "order", EventName: "OrderPlaced", Count: 3},
+		{AggregateName: "order", EventName: "OrderCancelled", Count: 1},
+		{AggregateName: "user", EventName: "UserRegistered", Count: 2},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(
+		"EVENT_STORE_MODE=embedded\nEVENT_STORE_DSN="+dsn+"\n",
+	), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	info := ScanStorage(dir)
+	if info.EventCount("order", "OrderPlaced") != 3 {
+		t.Errorf("EventCount(order, OrderPlaced) = %d, want 3", info.EventCount("order", "OrderPlaced"))
+	}
+	if info.EventCount("order", "OrderCancelled") != 1 {
+		t.Errorf("EventCount(order, OrderCancelled) = %d, want 1", info.EventCount("order", "OrderCancelled"))
+	}
+	if info.EventCount("user", "UserRegistered") != 2 {
+		t.Errorf("EventCount(user, UserRegistered) = %d, want 2", info.EventCount("user", "UserRegistered"))
+	}
+	// Unknown aggregate/event → 0, no panic.
+	if info.EventCount("order", "NeverStored") != 0 {
+		t.Errorf("EventCount(order, NeverStored) = %d, want 0", info.EventCount("order", "NeverStored"))
+	}
+	if info.EventCount("ghost", "X") != 0 {
+		t.Errorf("EventCount(ghost, X) = %d, want 0", info.EventCount("ghost", "X"))
+	}
+}
+
+// A project with no SQLite file (fresh / esb-server) reports 0 without panicking.
+func TestScanStorage_EventCountNilSafe(t *testing.T) {
+	var info StorageInfo
+	if info.EventCount("order", "OrderPlaced") != 0 {
+		t.Error("EventCount on zero StorageInfo must be 0")
+	}
 }

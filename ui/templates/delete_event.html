@@ -1,0 +1,60 @@
+{{define "delete_event"}}
+<section class="hero">
+  <h1>Hapus event <code>{{.EventName}}</code></h1>
+  <p class="muted">Aggregate <code>{{.AggregateName}}</code> · mode storage: <code>{{.Mode}}</code></p>
+</section>
+
+{{if .Error}}
+<div class="flash error">{{.Error}}</div>
+{{end}}
+
+<section class="cmd">
+  <h3>Cek data tersimpan</h3>
+  {{if .CanVerify}}
+    {{if gt .EventCount 0}}
+    <div class="flash error">
+      <strong>Peringatan:</strong> ada <strong>{{.EventCount}}</strong> event
+      <code>{{.EventName}}</code> yang sudah tersimpan di event store lokal.
+      Menghapus definisinya berarti replay ke depan akan <strong>diam-diam
+      mengabaikan</strong> event-event itu (state dari event ini tidak lagi
+      diterapkan). Data lama di tabel <code>events</code> tidak dihapus.
+    </div>
+    {{else}}
+    <p class="muted">Tidak ada event <code>{{.EventName}}</code> tersimpan di
+      store lokal (0 baris). Aman untuk dihapus.</p>
+    {{end}}
+  {{else}}
+    <div class="flash">
+      {{if eq .Mode "esb-server"}}
+      Mode <code>esb-server</code> aktif — esb tidak bisa memverifikasi data
+      event ini dari sini. <strong>Cek manual di server</strong> sebelum
+      menghapus.
+      {{else}}
+      Event store lokal belum bisa dibaca (DB belum dibuat, atau
+      <code>EVENT_STORE_DSN</code>/<code>DB_DSN</code> belum di-set di
+      <code>.env</code>). esb tidak bisa memverifikasi apakah event ini sudah
+      tersimpan — <strong>cek manual</strong> sebelum menghapus.
+      {{end}}
+    </div>
+  {{end}}
+</section>
+
+<section class="cmd">
+  <h3>Konfirmasi hapus</h3>
+  <p class="muted">Yang dihapus hanya <strong>kode</strong>: struct event,
+    constructor, case di <code>Apply()</code>, dan case di projection worker.
+    Tidak ada data event store yang dihapus.</p>
+  <form method="POST" action="/aggregates/{{.AggregateName}}/events/{{.EventName}}/delete">
+    {{if .RequireAck}}
+    <label class="ack">
+      <input type="checkbox" name="ack" value="on" required>
+      <span>Saya paham event ini {{if .CanVerify}}sudah pernah tersimpan{{else}}mungkin sudah tersimpan di server{{end}} dan replay ke depan akan mengabaikan datanya.</span>
+    </label>
+    {{end}}
+    <div class="form-actions">
+      <button type="submit" class="danger">Hapus event</button>
+      <a class="btn-cancel" href="/aggregates/{{.AggregateName}}">Batal</a>
+    </div>
+  </form>
+</section>
+{{end}}
