@@ -429,6 +429,25 @@ di-skip. Key kosong menonaktifkan guard. Di-generate sekali per proyek.
 
 ---
 
+### `esb delete event <aggregate> <EventName>`
+
+Kebalikan `esb add event`: hapus **kode** sebuah event dari aggregate — struct,
+constructor, case di `Apply()`, dan case di projection worker — secara AST-based
+dan atomik (all-or-nothing).
+
+```bash
+esb delete event order OrderPlaced
+```
+
+**Tidak** menghapus data event yang sudah tersimpan. Kalau event ini pernah
+terjadi, baris di event store tetap ada; yang hilang cuma representasi kodenya,
+dan replay ke depan akan **diam-diam mengabaikan** event itu. Karena itu cek
+event store dulu sebelum menghapus (UI melakukan pengecekan ini otomatis —
+lihat `esb ui`). Sebuah upcaster yang menargetkan event akan **memblokir**
+penghapusan; hapus upcaster-nya dulu.
+
+---
+
 ### `esb show [aggregate-name]`
 
 Cetak ringkasan satu-layar dari proyek saat ini: aggregate + event, handler wiring, projection worker (single/multi), storage & run-workers, dan wire provider graph. Tidak menulis apa-apa — murni baca file hasil generator.
@@ -495,14 +514,23 @@ esb ui --addr 127.0.0.1:9001    # bind ke host/port lain
 
 Setelah jalan, buka URL yang dicetak di terminal.
 
+Dari halaman detail aggregate kamu bisa **menambah event** (form dengan
+aggregate terisi otomatis) dan **menghapus event**. Sebelum hapus, UI mengecek
+apakah event itu sudah pernah tersimpan di event store: di mode embedded ia
+menampilkan jumlah baris tersimpan dan **mewajibkan konfirmasi** kalau > 0; di
+mode esb-server (atau kalau DB belum bisa dibaca) ia jujur bilang tak bisa
+verifikasi dan tetap minta konfirmasi. Penghapusan hanya mengubah kode — data
+event store tidak disentuh.
+
 #### Routes
 
 | Method | Route | Deskripsi |
 |---|---|---|
 | `GET`  | `/healthz` | smoke endpoint, selalu 200 kalau proses hidup |
 | `GET`  | `/` | dashboard: module, aggregates, events, projections, handlers, queries, storage |
-| `GET`  | `/aggregates/{name}` | detail satu aggregate: events, handlers, query, projection worker |
-| `GET`  | `/commands` | katalog command + form untuk menjalankan command |
+| `GET`  | `/aggregates/{name}` | detail satu aggregate: events (dengan tombol **Add event** + **Delete**), handlers, query, projection worker |
+| `GET`, `POST` | `/aggregates/{name}/events/{event}/delete` | halaman konfirmasi hapus event: cek data tersimpan dulu, lalu jalankan `esb delete event` |
+| `GET`  | `/commands` | katalog command + form (dikelompokkan: Scaffold / Recipes / Evolusi / Proyek) |
 | `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
 | `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |
 | `GET`  | `/storage` | mode event store, event/snapshot count per aggregate, isi tabel locks (embedded) |
