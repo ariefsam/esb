@@ -365,6 +365,24 @@ debit-gagal / credit-gagal-kompensasi).
 
 ---
 
+### `esb add upcaster <aggregate> <EventName>`
+
+Daftarkan **upcaster** — fungsi yang memigrasikan payload event lama ke bentuk
+terbaru **saat dibaca**. Setiap `Replay`/`load` merutekan event stored lewat
+rantai upcaster sebelum `Apply`, jadi `Apply` selalu melihat bentuk terbaru.
+
+```bash
+esb add upcaster order OrderPlaced
+```
+
+Menghasilkan `domain/upcast_<agg>_<event>.go` berisi stub identity + auto-register.
+Edit fungsinya saat kamu rename/split/hitung field; jalankan lagi untuk
+menambah upcaster berikutnya (rantai v1→v2→v3). Default identity aman kalau kamu
+hanya **menambah** field (field yang hilang jadi zero value). Registry
+`domain.Upcast` no-op sampai ada upcaster pertama.
+
+---
+
 ### `esb show [aggregate-name]`
 
 Cetak ringkasan satu-layar dari proyek saat ini: aggregate + event, handler wiring, projection worker (single/multi), storage & run-workers, dan wire provider graph. Tidak menulis apa-apa — murni baca file hasil generator.

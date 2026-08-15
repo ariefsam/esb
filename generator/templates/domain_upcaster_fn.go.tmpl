@@ -1,0 +1,24 @@
+package domain
+
+import "encoding/json"
+
+func init() { RegisterUpcaster("{{.EventName}}", upcast{{.EventName}}) }
+
+// upcast{{.EventName}} migrates a stored {{.EventName}} payload to the current
+// shape. The identity default is correct when you only ADDED fields (a missing
+// field unmarshals to its zero value); edit it when you rename, split, or
+// compute a field so old events replay correctly.
+//
+// Example — default a newly-added "currency" field on old events:
+//
+//	var m map[string]json.RawMessage
+//	if err := json.Unmarshal(raw, &m); err != nil {
+//		return nil, err
+//	}
+//	if _, ok := m["currency"]; !ok {
+//		m["currency"] = json.RawMessage(`"USD"`)
+//	}
+//	return json.Marshal(m)
+func upcast{{.EventName}}(raw json.RawMessage) (json.RawMessage, error) {
+	return raw, nil
+}

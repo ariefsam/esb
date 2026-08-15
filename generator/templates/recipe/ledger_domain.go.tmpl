@@ -65,7 +65,11 @@ func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessa
 // Replay rebuilds aggregate state by replaying events from the store.
 func ({{.Receiver}} *{{.NamePascal}}) Replay(events []Event) error {
 	for _, e := range events {
-		if err := {{.Receiver}}.Apply(e.EventName, e.Data); err != nil {
+		data, err := Upcast(e.EventName, e.Data)
+		if err != nil {
+			return err
+		}
+		if err := {{.Receiver}}.Apply(e.EventName, data); err != nil {
 			return err
 		}
 	}

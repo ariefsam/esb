@@ -151,6 +151,17 @@ var catalog = []CatalogEntry{
 		Build:   buildAddRecipeSaga,
 	},
 	{
+		ID:          "add-upcaster",
+		Label:       "Add upcaster",
+		Description: "Register an event upcaster so old stored payloads are migrated to the current shape on replay. PascalCase event name.",
+		Fields: []CommandField{
+			{Name: "aggregate", Label: "Aggregate", Placeholder: "order", Required: true, Type: "text", Help: "snake_case aggregate name"},
+			{Name: "event", Label: "Event name", Placeholder: "OrderPlaced", Required: true, Type: "text", Help: "PascalCase"},
+		},
+		Preview: []string{"esb", "add", "upcaster", "order", "OrderPlaced"},
+		Build:   buildAddUpcaster,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -364,6 +375,21 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("name must be snake_case")
 	}
 	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddUpcaster(form FormInput) ([]string, error) {
+	agg := onlyValue(form, "aggregate")
+	if err := validateFieldName(agg); err != nil {
+		return nil, fmt.Errorf("aggregate: %w", err)
+	}
+	event := onlyValue(form, "event")
+	if err := validateFieldName(event); err != nil {
+		return nil, fmt.Errorf("event: %w", err)
+	}
+	if naming.ToPascalCase(event) != event {
+		return nil, fmt.Errorf("event name must be PascalCase")
+	}
+	return []string{"esb", "add", "upcaster", agg, event}, nil
 }
 
 func buildAddRecipeSaga(form FormInput) ([]string, error) {

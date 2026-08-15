@@ -244,7 +244,11 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
    + query by-state, handler, scenario test (transisi valid & ilegal).
 
 **Fase 3 — lintas-aggregate & evolusi.**
-6. **Idempotent** flag + **upcaster** (nilai tinggi, effort rendah).
+6. **Idempotent** flag + ✅ **upcaster** (`esb add upcaster <agg> <Event>`):
+   registry `domain.Upcast` (no-op sampai ada upcaster), hook di `Replay` semua
+   aggregate (rute event lama → Upcast → Apply), fungsi stub + auto-register,
+   rantai v1→v2→v3. Diverifikasi end-to-end (event lama tanpa field → default
+   di-inject saat replay).
 7. ✅ **Saga** money-transfer (`esb add recipe saga <name>`): orchestration saga
    dua-langkah (Debit→Credit) dengan **kompensasi** (refund source saat credit
    gagal). Kegagalan leg = outcome domain (event Failed/Compensated), bukan
