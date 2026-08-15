@@ -96,6 +96,11 @@ func TestBuildArgv_AcceptedCommands(t *testing.T) {
 			want:    []string{"esb", "add", "query", "orders_by_buyer", "--aggregate", "order"},
 		},
 		{
+			command: "add-recipe-crud",
+			form:    FormInput{"name": {"product"}, "fields": {"name:string", "price:int64"}},
+			want:    []string{"esb", "add", "recipe", "crud", "product", "name:string", "price:int64"},
+		},
+		{
 			command: "show",
 			form:    FormInput{},
 			want:    []string{"esb", "show"},
@@ -132,6 +137,9 @@ func TestBuildArgv_RejectsInvalidNames(t *testing.T) {
 		{"add-projection", FormInput{"name": {"x"}, "aggregates": {"bad name"}}},
 		{"add-handler", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
 		{"add-query", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
+		{"add-recipe-crud", FormInput{"name": {"Product"}}},                                  // not snake_case
+		{"add-recipe-crud", FormInput{"name": {"product;rm -rf /"}}},                         // shell metachar
+		{"add-recipe-crud", FormInput{"name": {"product"}, "fields": {"price;evil"}}},        // bad field
 		{"show", FormInput{"aggregate": {"bad name"}}},
 	}
 	for _, tc := range cases {

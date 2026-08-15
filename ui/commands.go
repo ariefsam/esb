@@ -108,6 +108,17 @@ var catalog = []CatalogEntry{
 		Build:   buildAddQuery,
 	},
 	{
+		ID:          "add-recipe-crud",
+		Label:       "Add CRUD recipe",
+		Description: "Scaffold a whole CRUD slice: Created/Updated/Archived events, commands, projection, queries, handlers, and tests. snake_case name, field:type pairs.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "product", Required: true, Type: "text", Help: "snake_case entity name"},
+			{Name: "fields", Label: "Fields", Placeholder: "name:string price:int64 sku:string", Type: "list", Help: "one field:type per line"},
+		},
+		Preview: []string{"esb", "add", "recipe", "crud", "product", "name:string", "price:int64", "sku:string"},
+		Build:   buildAddRecipeCRUD,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -291,6 +302,25 @@ func buildAddQuery(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("aggregate: %w", err)
 	}
 	return []string{"esb", "add", "query", name, "--aggregate", agg}, nil
+}
+
+func buildAddRecipeCRUD(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	fields := form["fields"]
+	for _, f := range fields {
+		if err := validateFieldType(f); err != nil {
+			return nil, fmt.Errorf("field %q: %w", f, err)
+		}
+	}
+	argv := []string{"esb", "add", "recipe", "crud", name}
+	argv = append(argv, fields...)
+	return argv, nil
 }
 
 func buildShow(form FormInput) ([]string, error) {
