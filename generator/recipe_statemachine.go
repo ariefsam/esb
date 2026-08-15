@@ -2,8 +2,6 @@ package generator
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ariefsam/esb/injector"
@@ -54,22 +52,11 @@ func AddStateMachine(name, statesCSV, transitionsCSV string) error {
 		actions = append(actions, "  create  "+f.dest)
 	}
 
-	if _, statErr := os.Stat(filepath.FromSlash("server/handler/response.go")); os.IsNotExist(statErr) {
-		content, err := renderTemplate("recipe/crud_response.go.tmpl", data)
-		if err != nil {
-			return fmt.Errorf("generate server/handler/response.go: %w", err)
-		}
-		tx.Create("server/handler/response.go", content)
-		actions = append(actions, "  create  server/handler/response.go")
-	}
-
-	if ok, err := tx.Contains("projection/db.go", data.NamePascal+"Row{}"); err != nil {
+	if err := ensureResponseHelper(tx, &actions); err != nil {
 		return err
-	} else if !ok {
-		if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", "\t\t&"+data.NamePascal+"Row{},"); err != nil {
-			return err
-		}
-		actions = append(actions, "  update  projection/db.go")
+	}
+	if err := injectAutoMigrateModel(tx, data.NamePascal+"Row", &actions); err != nil {
+		return err
 	}
 
 	if err := wireAggregateSlice(tx, moduleName, data.NamePascal, &actions); err != nil {
