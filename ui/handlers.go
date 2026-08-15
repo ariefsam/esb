@@ -194,6 +194,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	page := CommandsPage{
 		Kind:     PageCommands,
 		Project:  model,
+		Groups:   PublicCommandGroups(),
 		Commands: PublicCommands(),
 	}
 

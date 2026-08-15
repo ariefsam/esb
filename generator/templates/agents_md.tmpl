@@ -98,6 +98,8 @@ each generates a complete, tested vertical slice in one atomic step:
   (events → outbox table) + a publisher worker relaying them to the outside.
 - `esb add upcaster <aggregate> <EventName>` — migrate stored event payloads
   from an older shape to the current one on read (schema evolution).
+- `esb add idempotency` — a reusable guard (AlreadyProcessed / Once) so commands
+  can be made safe to retry, keyed by an event's IdempotencyKey.
 
 **Run `esb --help` and `esb <command> --help` for the authoritative,
 up-to-date usage** — available commands and flags may have changed since

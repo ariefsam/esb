@@ -172,6 +172,14 @@ var catalog = []CatalogEntry{
 		Build:   buildAddUpcaster,
 	},
 	{
+		ID:          "add-idempotency",
+		Label:       "Add idempotency guard",
+		Description: "Generate a reusable idempotency guard (AlreadyProcessed / Once) so commands can be made safe to retry. Generated once per project.",
+		Fields:      []CommandField{},
+		Preview:     []string{"esb", "add", "idempotency"},
+		Build:       buildAddIdempotency,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -233,11 +241,94 @@ func PublicCommands() []CommandView {
 			ID:          c.ID,
 			Label:       c.Label,
 			Description: c.Description,
+			Details:     commandDetails[c.ID],
 			Fields:      c.Fields,
 			Preview:     c.Preview,
 		})
 	}
 	return out
+}
+
+// commandGroups defines the sections the Commands page is organized into, in
+// display order, with the intro shown under each heading.
+var commandGroups = []struct{ id, title, intro string }{
+	{"scaffold", "Scaffold komponen", "Tambah satu komponen ke proyek yang sudah ada."},
+	{"recipe", "Recipes — pola event-sourcing lengkap", "Scaffold satu pola utuh (aggregate + command + projection + query + handler + test) dalam satu langkah atomik. Kalau ada bagian gagal, tak ada file yang ditulis."},
+	{"evolve", "Evolusi skema & keandalan", "Alat lintas-aggregate: versioning event dan retry-safety."},
+	{"project", "Proyek", "Inspeksi dan migrasi event store."},
+}
+
+// commandGroupOf maps a command ID to its group; unmapped commands fall into
+// the last group.
+var commandGroupOf = map[string]string{
+	"add-aggregate": "scaffold", "add-event": "scaffold", "add-projection": "scaffold",
+	"add-handler": "scaffold", "add-query": "scaffold",
+	"add-recipe-crud": "recipe", "add-recipe-ledger": "recipe", "add-recipe-statemachine": "recipe",
+	"add-recipe-saga": "recipe", "add-recipe-outbox": "recipe",
+	"add-upcaster": "evolve", "add-idempotency": "evolve",
+	"show": "project", "migrate-to-esb": "project", "migrate-to-embedded": "project",
+}
+
+// commandDetails holds the "what it generates" bullet points shown on richer
+// commands (mainly recipes).
+var commandDetails = map[string][]string{
+	"add-recipe-crud": {
+		"Events: Created / Updated / Archived (soft delete, bukan hapus baris)",
+		"Commands: Create / Update / Archive dengan invariant di aggregate",
+		"Read model + query List/Get, handler HTTP, scenario test (sukses + gagal)",
+	},
+	"add-recipe-ledger": {
+		"Events: Opened / Deposited / Withdrawn / Frozen / Closed",
+		"Invariant saldo non-negatif (uang int64 minor unit)",
+		"Balance + statement read model, query, test termasuk concurrency",
+	},
+	"add-recipe-statemachine": {
+		"Satu event per state + transition table",
+		"Command Transition berpenjaga (tolak transisi ilegal & state tak dikenal)",
+		"Read model current-state, query by-state, handler, scenario test",
+	},
+	"add-recipe-saga": {
+		"Transfer dua-langkah (Debit→Credit) dengan kompensasi (refund saat gagal)",
+		"Port interface + stub log (ganti dengan adapter asli)",
+		"Read model, query by-state, scenario test (happy / gagal / kompensasi)",
+	},
+	"add-recipe-outbox": {
+		"Ingest worker: event → tabel outbox (idempoten by event id)",
+		"Publisher worker → Publisher port + stub (at-least-once)",
+		"Query unpublished + test (ingest / publish / retry)",
+	},
+	"add-upcaster": {
+		"Migrasi payload event lama → bentuk terbaru saat replay",
+		"Bisa dirantai v1→v2→v3; default identity aman kalau hanya nambah field",
+	},
+	"add-idempotency": {
+		"Guard AlreadyProcessed / Once berbasis IdempotencyKey event",
+		"Command aman di-retry — tanpa tabel tambahan, opt-in per command",
+	},
+}
+
+// PublicCommandGroups returns the catalog grouped for the Commands page, in
+// commandGroups order, preserving catalog order within each group.
+func PublicCommandGroups() []CommandGroup {
+	byID := map[string]CommandView{}
+	for _, v := range PublicCommands() {
+		byID[v.ID] = v
+	}
+	groups := make([]CommandGroup, 0, len(commandGroups))
+	lastGroupID := commandGroups[len(commandGroups)-1].id
+	for _, g := range commandGroups {
+		grp := CommandGroup{Title: g.title, Intro: g.intro}
+		for _, c := range catalog {
+			gid := commandGroupOf[c.ID]
+			if gid == g.id || (gid == "" && g.id == lastGroupID) {
+				grp.Commands = append(grp.Commands, byID[c.ID])
+			}
+		}
+		if len(grp.Commands) > 0 {
+			groups = append(groups, grp)
+		}
+	}
+	return groups
 }
 
 // validateFieldName enforces the conservative input rules the UI uses
@@ -385,6 +476,10 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("name must be snake_case")
 	}
 	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddIdempotency(form FormInput) ([]string, error) {
+	return []string{"esb", "add", "idempotency"}, nil
 }
 
 func buildAddUpcaster(form FormInput) ([]string, error) {

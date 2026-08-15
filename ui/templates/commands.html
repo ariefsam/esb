@@ -11,10 +11,20 @@
 <div class="flash">{{.Flash}}</div>
 {{end}}
 
+{{range .Groups}}
+<section class="cmd-group">
+  <h2 class="cmd-group-title">{{.Title}}</h2>
+  {{if .Intro}}<p class="muted cmd-group-intro">{{.Intro}}</p>{{end}}
+</section>
 {{range .Commands}}
 <section class="cmd">
-  <h2>{{.Label}}</h2>
+  <h3>{{.Label}}</h3>
   <p class="muted">{{.Description}}</p>
+  {{if .Details}}
+  <ul class="cmd-details">
+    {{range .Details}}<li>{{.}}</li>{{end}}
+  </ul>
+  {{end}}
   <form method="POST" action="/commands/execute" data-cmd="{{.ID}}">
     <input type="hidden" name="command" value="{{.ID}}">
     <div class="grid">
@@ -44,5 +54,6 @@
     </div>
   </form>
 </section>
+{{end}}
 {{end}}
 {{end}}

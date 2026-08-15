@@ -103,9 +103,18 @@ type AggregateDetailPage struct {
 type CommandsPage struct {
 	Kind     PageKind
 	Project  inspector.ProjectModel
-	Commands []CommandView
-	Error    string // pre-fill error banner when a previous run was rejected
+	Groups   []CommandGroup
+	Commands []CommandView // flat list, kept for callers that don't group
+	Error    string        // pre-fill error banner when a previous run was rejected
 	Flash    string
+}
+
+// CommandGroup is a titled section of related commands on the Commands page
+// (e.g. "Recipes"), with a short intro explaining the section.
+type CommandGroup struct {
+	Title    string
+	Intro    string
+	Commands []CommandView
 }
 
 // CommandView is one allow-listed command in the catalog. The handler
@@ -114,6 +123,7 @@ type CommandView struct {
 	ID          string
 	Label       string
 	Description string
+	Details     []string // optional bullet points ("what it generates")
 	Fields      []CommandField
 	Preview     []string // example argv shown when the form is empty
 }
