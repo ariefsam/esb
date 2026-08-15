@@ -59,7 +59,8 @@ Pola paling diminta & paling sering salah di ES ("mana DELETE-nya?").
     lalu `store("<Name>Created", …)`.
   - `Update(ctx, id, patch…)` → guard `if !agg.Exists() || agg.Archived { … }`.
   - `Archive(ctx, id)` → idempoten.
-- Projection read-model `<Name>Row` + kolom `archived_at`.
+- Projection read-model `<Name>Row` + kolom `archived` (flag; List
+  menyembunyikan yang ter-archive, bukan menghapus baris).
 - Query: `List<Name>s` (filter `archived_at IS NULL`), `Get<Name>ByID`.
 - Handler HTTP untuk tiap command.
 - Scenario test GWT: create→update→archive, plus "create dua kali → error",

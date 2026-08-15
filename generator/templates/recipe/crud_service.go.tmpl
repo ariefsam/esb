@@ -69,14 +69,18 @@ func (s *{{.NamePascal}}Service) Update(ctx context.Context, id string, in {{.Na
 }
 
 // Archive records a {{.NamePascal}}Archived event (soft delete). It fails if
-// the aggregate does not exist or is already archived.
+// the aggregate never existed, and is idempotent when already archived (a
+// retried Archive is a no-op success rather than an error).
 func (s *{{.NamePascal}}Service) Archive(ctx context.Context, id string) error {
 	agg, err := s.load(ctx, id)
 	if err != nil {
 		return err
 	}
-	if !agg.Exists() {
+	if agg.Version == 0 {
 		return Err{{.NamePascal}}NotFound
+	}
+	if agg.Archived {
+		return nil
 	}
 	return s.store(ctx, agg, "{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{})
 }
