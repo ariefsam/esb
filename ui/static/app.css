@@ -182,3 +182,22 @@ footer {
   color: var(--fg-mute);
   font-size: 12px;
 }
+/* Commands page: grouped sections + recipe explanations */
+.cmd { margin-bottom: 16px; }
+.cmd h3 { margin-top: 0; }
+.cmd-group {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 28px 0 10px;
+}
+.cmd-group:first-of-type { margin-top: 8px; }
+.cmd-group-title { margin: 0 0 4px; font-size: 18px; }
+.cmd-group-intro { margin: 0; max-width: 70ch; }
+.cmd-details {
+  margin: 8px 0 4px;
+  padding-left: 18px;
+  color: var(--fg-mute);
+  font-size: 13px;
+}
+.cmd-details li { margin: 2px 0; }

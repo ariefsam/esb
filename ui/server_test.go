@@ -156,6 +156,18 @@ func TestServer_CommandsPage(t *testing.T) {
 			t.Errorf("body missing %q", want)
 		}
 	}
+	// Recipes must be surfaced as their own section, with the section intro
+	// and per-recipe "what it generates" explanation.
+	for _, want := range []string{
+		"Recipes — pola event-sourcing lengkap",   // group heading
+		"dalam satu langkah atomik",                // group intro
+		"Add CRUD recipe",                          // a recipe label
+		"Create / Update / Archive dengan invariant", // a recipe detail bullet
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("commands page missing recipe explanation %q", want)
+		}
+	}
 	if strings.Contains(body, "render error") {
 		t.Errorf("body template failed to render: %q", body)
 	}
@@ -589,7 +601,7 @@ func TestParseTemplates_RendersAllRoutes(t *testing.T) {
 	}{
 		{"overview", OverviewPage{Kind: PageOverview, Title: "Project Overview", Subtitle: "demo — 0 aggregates", AggregateRows: []AggregateRow{}}},
 		{"aggregate_detail", AggregateDetailPage{Kind: PageAggregateDetail, Name: "demo", Events: []string{"DemoEvent"}}},
-		{"commands", CommandsPage{Kind: PageCommands, Commands: PublicCommands()}},
+		{"commands", CommandsPage{Kind: PageCommands, Groups: PublicCommandGroups(), Commands: PublicCommands()}},
 		{"run_detail", RunPage{Kind: PageRunDetail, Found: true, Running: false, Run: &Run{ID: "r-1", CommandID: "show", Argv: []string{"esb", "show"}, Dir: "/tmp", Status: RunSucceed, ExitCode: 0}}},
 		{"storage", StoragePage{Kind: PageStorage, Mode: "embedded", ModeLabel: "embedded", DSN: "/tmp/demo.db", TotalEvents: 3, HasSQLite: true, CanMigrateToESB: true, Rows: []StorageAggregateRow{{Name: "order", Count: 3}}}},
 		{"migrate", MigrateFormPage{Kind: PageMigrate, Direction: "to-esb", DSN: "/tmp/demo.db", ESBURL: "http://esb.internal:8080", TenantID: "demo", ProjectID: "toko"}},
