@@ -27,9 +27,27 @@ Examples:
   esb add recipe ledger account
   esb add recipe saga money_transfer
   esb add recipe statemachine order --states placed,paid,shipped,delivered,cancelled \
-    --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"`,
-	Args: cobra.MinimumNArgs(1),
+    --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"
+
+Run 'esb add recipe --list' to list the available recipes.`,
+	Args: cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if recipeList {
+			fmt.Println("Available recipes:")
+			for _, c := range cmd.Commands() {
+				if c.Hidden || c.Name() == "help" {
+					continue
+				}
+				fmt.Printf("  %-12s %s\n", c.Name(), c.Short)
+			}
+			return nil
+		}
+		// No subcommand and no --list: show help rather than scaffolding.
+		return cmd.Help()
+	},
 }
+
+var recipeList bool
 
 var addRecipeSagaCmd = &cobra.Command{
 	Use:   "saga <name>",
@@ -175,6 +193,8 @@ Examples:
 }
 
 func init() {
+	addRecipeCmd.Flags().BoolVar(&recipeList, "list", false, "list the available recipes and exit")
+
 	addRecipeStateMachineCmd.Flags().StringVar(&smStates, "states", "", "comma-separated snake_case states; first is the initial state (required)")
 	addRecipeStateMachineCmd.Flags().StringVar(&smTransitions, "transitions", "", "comma-separated from->to pairs")
 

@@ -2,8 +2,6 @@ package generator
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ariefsam/esb/injector"
@@ -61,24 +59,14 @@ func AddLedger(name string) error {
 		actions = append(actions, "  create  "+f.dest)
 	}
 
-	if _, statErr := os.Stat(filepath.FromSlash("server/handler/response.go")); os.IsNotExist(statErr) {
-		content, err := renderTemplate("recipe/crud_response.go.tmpl", data)
-		if err != nil {
-			return fmt.Errorf("generate server/handler/response.go: %w", err)
-		}
-		tx.Create("server/handler/response.go", content)
-		actions = append(actions, "  create  server/handler/response.go")
+	if err := ensureResponseHelper(tx, &actions); err != nil {
+		return err
 	}
 
 	// AutoMigrate both read-model tables (balance + statement).
 	for _, row := range []string{pascal + "BalanceRow", pascal + "EntryRow"} {
-		if ok, err := tx.Contains("projection/db.go", row+"{}"); err != nil {
+		if err := injectAutoMigrateModel(tx, row, &actions); err != nil {
 			return err
-		} else if !ok {
-			if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", "\t\t&"+row+"{},"); err != nil {
-				return err
-			}
-			actions = append(actions, "  update  projection/db.go")
 		}
 	}
 

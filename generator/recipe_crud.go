@@ -2,8 +2,6 @@ package generator
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ariefsam/esb/injector"
@@ -62,15 +60,8 @@ func AddCRUD(name string, fields []FieldDef) error {
 		actions = append(actions, "  create  "+f.dest)
 	}
 
-	// Shared HTTP response helpers — generate once so multiple CRUD recipes
-	// don't redefine writeJSON/writeError.
-	if _, statErr := os.Stat(filepath.FromSlash("server/handler/response.go")); os.IsNotExist(statErr) {
-		content, err := renderTemplate("recipe/crud_response.go.tmpl", data)
-		if err != nil {
-			return fmt.Errorf("generate server/handler/response.go: %w", err)
-		}
-		tx.Create("server/handler/response.go", content)
-		actions = append(actions, "  create  server/handler/response.go")
+	if err := ensureResponseHelper(tx, &actions); err != nil {
+		return err
 	}
 
 	if err := wireCRUD(tx, moduleName, data, &actions); err != nil {
@@ -96,13 +87,8 @@ func wireCRUD(tx *injector.Tx, moduleName string, data CRUDData, actions *[]stri
 	handlerType := pascal + "Handler"
 
 	// projection/db.go — AutoMigrate the read-model row.
-	if ok, err := tx.Contains("projection/db.go", pascal+"Row{}"); err != nil {
+	if err := injectAutoMigrateModel(tx, pascal+"Row", actions); err != nil {
 		return err
-	} else if !ok {
-		if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", "\t\t&"+pascal+"Row{},"); err != nil {
-			return err
-		}
-		*actions = append(*actions, "  update  projection/db.go")
 	}
 
 	// Shared wiring: service instance + projection worker + write-side handler.

@@ -55,13 +55,8 @@ func AddOutbox(name string) error {
 		actions = append(actions, "  create  "+f.dest)
 	}
 
-	if ok, err := tx.Contains("projection/db.go", pascal+"OutboxRow{}"); err != nil {
+	if err := injectAutoMigrateModel(tx, pascal+"OutboxRow", &actions); err != nil {
 		return err
-	} else if !ok {
-		if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", "\t\t&"+pascal+"OutboxRow{},"); err != nil {
-			return err
-		}
-		actions = append(actions, "  update  projection/db.go")
 	}
 
 	// Wire both background workers into App + main.go.
