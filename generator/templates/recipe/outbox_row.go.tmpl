@@ -1,0 +1,16 @@
+package projection
+
+// {{.NamePascal}}OutboxRow is one integration-event row in the transactional
+// outbox for the {{.NameKebab}} aggregate. The unique EventID makes ingest
+// idempotent; PublishedAt == 0 means not yet published.
+type {{.NamePascal}}OutboxRow struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	EventID     uint   `gorm:"uniqueIndex" json:"event_id"`
+	AggregateID string `gorm:"index;column:aggregate_id" json:"aggregate_id"`
+	EventName   string `gorm:"column:event_name" json:"event_name"`
+	Payload     []byte `gorm:"column:payload" json:"payload"`
+	CreatedAt   int64  `gorm:"column:created_at" json:"created_at"`
+	PublishedAt int64  `gorm:"column:published_at;index;not null;default:0" json:"published_at"`
+}
+
+func ({{.NamePascal}}OutboxRow) TableName() string { return "{{.Name}}_outbox" }

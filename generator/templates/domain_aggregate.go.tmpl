@@ -35,7 +35,11 @@ func ({{.ReceiverName}} *{{.AggregateNamePascal}}) Apply(eventName string, data 
 // Replay rebuilds aggregate state by replaying all events from the store.
 func ({{.ReceiverName}} *{{.AggregateNamePascal}}) Replay(events []Event) error {
 	for _, e := range events {
-		if err := {{.ReceiverName}}.Apply(e.EventName, e.Data); err != nil {
+		data, err := Upcast(e.EventName, e.Data)
+		if err != nil {
+			return err
+		}
+		if err := {{.ReceiverName}}.Apply(e.EventName, data); err != nil {
 			return err
 		}
 	}

@@ -1,0 +1,32 @@
+package domain
+
+import "encoding/json"
+
+// UpcastFunc migrates one stored event payload from an older shape to the
+// current one. It receives and returns the raw JSON of a single event's Data.
+type UpcastFunc func(json.RawMessage) (json.RawMessage, error)
+
+// upcasters holds, per event name, the ordered chain of upcasters to apply on
+// read. Register with RegisterUpcaster (typically from an init() added by
+// `esb add upcaster`). Aggregate Replay routes every stored event through
+// Upcast before Apply, so Apply only ever sees the current shape.
+var upcasters = map[string][]UpcastFunc{}
+
+// RegisterUpcaster appends fn to the upcast chain for eventName. Chains run in
+// registration order, so an event evolved v1->v2->v3 registers two upcasters.
+func RegisterUpcaster(eventName string, fn UpcastFunc) {
+	upcasters[eventName] = append(upcasters[eventName], fn)
+}
+
+// Upcast applies the registered upcaster chain for eventName to data. With no
+// registered upcasters it returns data unchanged, so it is a safe no-op until
+// the first `esb add upcaster`.
+func Upcast(eventName string, data json.RawMessage) (json.RawMessage, error) {
+	var err error
+	for _, fn := range upcasters[eventName] {
+		if data, err = fn(data); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}

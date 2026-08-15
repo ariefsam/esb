@@ -1,0 +1,15 @@
+package projection
+
+import (
+	"context"
+
+	"gorm.io/gorm"
+)
+
+// ListUnpublished{{.NamePascal}}Outbox returns outbox rows not yet published,
+// in insertion order.
+func ListUnpublished{{.NamePascal}}Outbox(ctx context.Context, db *gorm.DB) ([]{{.NamePascal}}OutboxRow, error) {
+	var rows []{{.NamePascal}}OutboxRow
+	err := db.WithContext(ctx).Where("published_at = 0").Order("id ASC").Find(&rows).Error
+	return rows, err
+}

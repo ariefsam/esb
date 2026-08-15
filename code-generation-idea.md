@@ -244,14 +244,22 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
    + query by-state, handler, scenario test (transisi valid & ilegal).
 
 **Fase 3 — lintas-aggregate & evolusi.**
-6. **Idempotent** flag + **upcaster** (nilai tinggi, effort rendah).
+6. **Idempotent** flag + ✅ **upcaster** (`esb add upcaster <agg> <Event>`):
+   registry `domain.Upcast` (no-op sampai ada upcaster), hook di `Replay` semua
+   aggregate (rute event lama → Upcast → Apply), fungsi stub + auto-register,
+   rantai v1→v2→v3. Diverifikasi end-to-end (event lama tanpa field → default
+   di-inject saat replay).
 7. ✅ **Saga** money-transfer (`esb add recipe saga <name>`): orchestration saga
    dua-langkah (Debit→Credit) dengan **kompensasi** (refund source saat credit
    gagal). Kegagalan leg = outcome domain (event Failed/Compensated), bukan
    error Go. Port interface + stub log (di-wire agar compile), read model +
    query by-state, handler, scenario test (happy / debit-gagal / credit-gagal-
    kompensasi). Diverifikasi runtime.
-8. **Outbox** publisher.
+8. ✅ **Outbox** publisher (`esb add recipe outbox <agg>`): ingest worker
+   (event → tabel outbox, idempoten by event id) + publisher worker (poll
+   unpublished → Publisher port + log stub → mark published, at-least-once).
+   Query unpublished + test (idempotent ingest / publish / retry). Dua worker
+   di-wire ke App + main.go. Diverifikasi runtime.
 
 **Fase 4 — ergonomi.**
 9. `esb add recipe --list` + regen `AGENTS.md`.

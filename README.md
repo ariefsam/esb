@@ -363,6 +363,41 @@ compile — ganti dengan adapter asli (mis. yang memanggil `AccountService`).
 Termasuk read model + query by-state, handler, dan scenario test (happy /
 debit-gagal / credit-gagal-kompensasi).
 
+#### `esb add recipe outbox <name>`
+
+**Transactional outbox** untuk integration events dari sebuah aggregate.
+
+```bash
+esb add recipe outbox order
+```
+
+Menghasilkan dua worker: **ingest worker** yang menulis tiap event `<name>` ke
+tabel outbox (idempoten by source event id), dan **publisher worker** yang
+mem-poll baris belum-terkirim lalu meneruskannya lewat sebuah `<Name>Publisher`
+port (stub log ikut di-generate & di-wire — ganti dengan adapter asli, mis. ke
+message bus/webhook), menandai `published` saat sukses (**at-least-once** —
+consumer downstream harus idempoten). Termasuk query unpublished + test
+(idempotent ingest / publish / retry-on-failure). Kedua worker di-wire ke App
+dan dijalankan di `main.go`.
+
+---
+
+### `esb add upcaster <aggregate> <EventName>`
+
+Daftarkan **upcaster** — fungsi yang memigrasikan payload event lama ke bentuk
+terbaru **saat dibaca**. Setiap `Replay`/`load` merutekan event stored lewat
+rantai upcaster sebelum `Apply`, jadi `Apply` selalu melihat bentuk terbaru.
+
+```bash
+esb add upcaster order OrderPlaced
+```
+
+Menghasilkan `domain/upcast_<agg>_<event>.go` berisi stub identity + auto-register.
+Edit fungsinya saat kamu rename/split/hitung field; jalankan lagi untuk
+menambah upcaster berikutnya (rantai v1→v2→v3). Default identity aman kalau kamu
+hanya **menambah** field (field yang hilang jadi zero value). Registry
+`domain.Upcast` no-op sampai ada upcaster pertama.
+
 ---
 
 ### `esb show [aggregate-name]`

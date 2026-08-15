@@ -28,6 +28,7 @@ func InitProject(moduleName, destDir string) error {
 		{"agents_md.tmpl", "AGENTS.md"},
 		{"domain_event.go.tmpl", "domain/event.go"},
 		{"domain_errors.go.tmpl", "domain/errors.go"},
+		{"domain_upcast.go.tmpl", "domain/upcast.go"},
 		{"eventstore_client.go.tmpl", "eventstore/client.go"},
 		{"eventstore_local_store.go.tmpl", "eventstore/local_store.go"},
 		{"eventstore_fake_store.go.tmpl", "eventstore/fake_store.go"},
