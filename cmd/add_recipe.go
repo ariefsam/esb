@@ -20,6 +20,7 @@ Available recipes:
   ledger       <name>                     append-only account: Open/Deposit/Withdraw/Freeze/Close
   statemachine <name> --states --transitions   guarded lifecycle transitions
   saga         <name>                     orchestration saga: two-step transfer + compensation
+  outbox       <name>                     transactional outbox: ingest + publisher for integration events
 
 Examples:
   esb add recipe crud product name:string price:int64 sku:string
@@ -148,6 +149,31 @@ Examples:
 	},
 }
 
+var addRecipeOutboxCmd = &cobra.Command{
+	Use:   "outbox <name>",
+	Short: "Transactional outbox: ingest an aggregate's events + publish them",
+	Long: `Generates a transactional outbox for an aggregate's events:
+
+  - an outbox table + ingest worker that appends each <name> event as an
+    integration-event row, idempotently (unique source event id)
+  - a publisher worker that relays unpublished rows through a <Name>Publisher
+    port (with a log stub), marking each published on success (at-least-once)
+  - a ListUnpublished<Name>Outbox query + tests (idempotent ingest, publish,
+    retry-on-failure)
+
+Both workers are wired into the app and started in main.go. Name must be
+snake_case and match the aggregate whose events you want to relay.
+
+Examples:
+  esb add recipe outbox order`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		fmt.Printf("Scaffolding outbox recipe: %s\n\n", name)
+		return generator.AddOutbox(name)
+	},
+}
+
 func init() {
 	addRecipeStateMachineCmd.Flags().StringVar(&smStates, "states", "", "comma-separated snake_case states; first is the initial state (required)")
 	addRecipeStateMachineCmd.Flags().StringVar(&smTransitions, "transitions", "", "comma-separated from->to pairs")
@@ -156,4 +182,5 @@ func init() {
 	addRecipeCmd.AddCommand(addRecipeLedgerCmd)
 	addRecipeCmd.AddCommand(addRecipeStateMachineCmd)
 	addRecipeCmd.AddCommand(addRecipeSagaCmd)
+	addRecipeCmd.AddCommand(addRecipeOutboxCmd)
 }

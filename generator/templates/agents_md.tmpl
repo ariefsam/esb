@@ -94,6 +94,10 @@ each generates a complete, tested vertical slice in one atomic step:
   lifecycle aggregate with a transition table that rejects illegal moves.
 - `esb add recipe saga <name>` — an orchestration saga: a two-step transfer
   through a Port interface that compensates (refunds) when the second leg fails.
+- `esb add recipe outbox <name>` — a transactional outbox: an ingest worker
+  (events → outbox table) + a publisher worker relaying them to the outside.
+- `esb add upcaster <aggregate> <EventName>` — migrate stored event payloads
+  from an older shape to the current one on read (schema evolution).
 
 **Run `esb --help` and `esb <command> --help` for the authoritative,
 up-to-date usage** — available commands and flags may have changed since

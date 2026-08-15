@@ -1,0 +1,75 @@
+package projection
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// {{.NamePascal}}Publisher is the boundary to the outside world (a message bus,
+// webhook, another service). Wire a real implementation in wire/wire.go.
+type {{.NamePascal}}Publisher interface {
+	Publish(ctx context.Context, eventName string, payload []byte) error
+}
+
+// {{.NamePascal}}LogPublisher is a placeholder {{.NamePascal}}Publisher that
+// only logs. Replace it with a real adapter.
+type {{.NamePascal}}LogPublisher struct{}
+
+func ({{.NamePascal}}LogPublisher) Publish(ctx context.Context, eventName string, payload []byte) error {
+	log.Printf("{{.Name}} outbox: TODO publish %s: %s", eventName, payload)
+	return nil
+}
+
+// {{.NamePascal}}OutboxPublisher polls the outbox for unpublished rows and
+// relays them through the Publisher, marking each published on success. A
+// publish error stops the current batch so the row is retried on the next
+// pass (at-least-once delivery — downstream consumers should be idempotent).
+type {{.NamePascal}}OutboxPublisher struct {
+	db  *gorm.DB
+	pub {{.NamePascal}}Publisher
+}
+
+func New{{.NamePascal}}OutboxPublisher(db *gorm.DB, pub {{.NamePascal}}Publisher) *{{.NamePascal}}OutboxPublisher {
+	return &{{.NamePascal}}OutboxPublisher{db: db, pub: pub}
+}
+
+func (p *{{.NamePascal}}OutboxPublisher) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		n, err := p.publishBatch(ctx)
+		if err != nil {
+			log.Printf("{{.Name}} outbox publisher: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		if n == 0 {
+			time.Sleep(time.Second) // nothing pending; back off
+		}
+	}
+}
+
+// publishBatch publishes up to 100 pending rows in id order and returns how
+// many were found. It stops at the first publish error, leaving that row (and
+// the rest) for the next pass.
+func (p *{{.NamePascal}}OutboxPublisher) publishBatch(ctx context.Context) (int, error) {
+	var rows []{{.NamePascal}}OutboxRow
+	if err := p.db.WithContext(ctx).Where("published_at = 0").Order("id ASC").Limit(100).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		if err := p.pub.Publish(ctx, row.EventName, row.Payload); err != nil {
+			return len(rows), err
+		}
+		if err := p.db.WithContext(ctx).Model(&{{.NamePascal}}OutboxRow{}).
+			Where("id = ?", row.ID).
+			Update("published_at", time.Now().UnixMilli()).Error; err != nil {
+			return len(rows), err
+		}
+	}
+	return len(rows), nil
+}

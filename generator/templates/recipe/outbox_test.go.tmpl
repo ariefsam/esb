@@ -1,0 +1,98 @@
+package projection
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
+	"{{.ModuleName}}/eventstore"
+)
+
+type fake{{.NamePascal}}Publisher struct {
+	fail      bool
+	published []string
+}
+
+func (p *fake{{.NamePascal}}Publisher) Publish(ctx context.Context, eventName string, payload []byte) error {
+	if p.fail {
+		return errors.New("publish boom")
+	}
+	p.published = append(p.published, eventName)
+	return nil
+}
+
+func new{{.NamePascal}}OutboxDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "outbox.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&{{.NamePascal}}OutboxRow{}, &ProjectionCursorRow{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+// Ingest writes one row per event and is idempotent on the source EventID.
+func Test{{.NamePascal}}Outbox_IngestIsIdempotent(t *testing.T) {
+	db := new{{.NamePascal}}OutboxDB(t)
+	w := New{{.NamePascal}}OutboxWorker(nil, db)
+	ctx := context.Background()
+	e := eventstore.Event{ID: 1, AggregateName: "{{.NameKebab}}", AggregateID: "a1", EventName: "Something", TimeMillis: 10, Data: []byte(`{"x":1}`)}
+	if err := w.applyEvent(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.applyEvent(ctx, e); err != nil { // same EventID again
+		t.Fatal(err)
+	}
+	var rows []{{.NamePascal}}OutboxRow
+	db.Find(&rows)
+	if len(rows) != 1 {
+		t.Fatalf("outbox rows = %d, want 1 (idempotent ingest)", len(rows))
+	}
+}
+
+// The publisher relays pending rows and marks them published; a second batch
+// finds nothing.
+func Test{{.NamePascal}}Outbox_PublishMarksRows(t *testing.T) {
+	db := new{{.NamePascal}}OutboxDB(t)
+	w := New{{.NamePascal}}OutboxWorker(nil, db)
+	ctx := context.Background()
+	if err := w.applyEvent(ctx, eventstore.Event{ID: 1, AggregateID: "a1", EventName: "Foo", TimeMillis: 10, Data: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fake{{.NamePascal}}Publisher{}
+	pub := New{{.NamePascal}}OutboxPublisher(db, fake)
+	n, err := pub.publishBatch(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || len(fake.published) != 1 || fake.published[0] != "Foo" {
+		t.Fatalf("publishBatch n=%d published=%v, want 1 [Foo]", n, fake.published)
+	}
+	if left, _ := ListUnpublished{{.NamePascal}}Outbox(ctx, db); len(left) != 0 {
+		t.Fatalf("unpublished after publish = %d, want 0", len(left))
+	}
+}
+
+// A publish failure leaves the row pending for retry (at-least-once).
+func Test{{.NamePascal}}Outbox_PublishFailureRetries(t *testing.T) {
+	db := new{{.NamePascal}}OutboxDB(t)
+	w := New{{.NamePascal}}OutboxWorker(nil, db)
+	ctx := context.Background()
+	if err := w.applyEvent(ctx, eventstore.Event{ID: 1, AggregateID: "a1", EventName: "Foo", TimeMillis: 10, Data: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	pub := New{{.NamePascal}}OutboxPublisher(db, &fake{{.NamePascal}}Publisher{fail: true})
+	if _, err := pub.publishBatch(ctx); err == nil {
+		t.Fatal("expected publish error")
+	}
+	if left, _ := ListUnpublished{{.NamePascal}}Outbox(ctx, db); len(left) != 1 {
+		t.Fatalf("unpublished after failed publish = %d, want 1 (retryable)", len(left))
+	}
+}

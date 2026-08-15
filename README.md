@@ -363,6 +363,23 @@ compile — ganti dengan adapter asli (mis. yang memanggil `AccountService`).
 Termasuk read model + query by-state, handler, dan scenario test (happy /
 debit-gagal / credit-gagal-kompensasi).
 
+#### `esb add recipe outbox <name>`
+
+**Transactional outbox** untuk integration events dari sebuah aggregate.
+
+```bash
+esb add recipe outbox order
+```
+
+Menghasilkan dua worker: **ingest worker** yang menulis tiap event `<name>` ke
+tabel outbox (idempoten by source event id), dan **publisher worker** yang
+mem-poll baris belum-terkirim lalu meneruskannya lewat sebuah `<Name>Publisher`
+port (stub log ikut di-generate & di-wire — ganti dengan adapter asli, mis. ke
+message bus/webhook), menandai `published` saat sukses (**at-least-once** —
+consumer downstream harus idempoten). Termasuk query unpublished + test
+(idempotent ingest / publish / retry-on-failure). Kedua worker di-wire ke App
+dan dijalankan di `main.go`.
+
 ---
 
 ### `esb add upcaster <aggregate> <EventName>`

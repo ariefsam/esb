@@ -116,6 +116,11 @@ func TestBuildArgv_AcceptedCommands(t *testing.T) {
 			want:    []string{"esb", "add", "recipe", "saga", "money_transfer"},
 		},
 		{
+			command: "add-recipe-outbox",
+			form:    FormInput{"name": {"order"}},
+			want:    []string{"esb", "add", "recipe", "outbox", "order"},
+		},
+		{
 			command: "add-upcaster",
 			form:    FormInput{"aggregate": {"order"}, "event": {"OrderPlaced"}},
 			want:    []string{"esb", "add", "upcaster", "order", "OrderPlaced"},

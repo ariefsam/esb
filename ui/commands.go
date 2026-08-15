@@ -151,6 +151,16 @@ var catalog = []CatalogEntry{
 		Build:   buildAddRecipeSaga,
 	},
 	{
+		ID:          "add-recipe-outbox",
+		Label:       "Add outbox recipe",
+		Description: "Scaffold a transactional outbox: ingest an aggregate's events + a publisher worker for integration events. snake_case name.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "order", Required: true, Type: "text", Help: "snake_case aggregate name whose events to relay"},
+		},
+		Preview: []string{"esb", "add", "recipe", "outbox", "order"},
+		Build:   buildAddRecipeOutbox,
+	},
+	{
 		ID:          "add-upcaster",
 		Label:       "Add upcaster",
 		Description: "Register an event upcaster so old stored payloads are migrated to the current shape on replay. PascalCase event name.",
@@ -390,6 +400,17 @@ func buildAddUpcaster(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("event name must be PascalCase")
 	}
 	return []string{"esb", "add", "upcaster", agg, event}, nil
+}
+
+func buildAddRecipeOutbox(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	return []string{"esb", "add", "recipe", "outbox", name}, nil
 }
 
 func buildAddRecipeSaga(form FormInput) ([]string, error) {
