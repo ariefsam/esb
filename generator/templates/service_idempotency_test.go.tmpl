@@ -1,0 +1,70 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"{{.ModuleName}}/eventstore"
+)
+
+func TestAlreadyProcessed(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	ctx := context.Background()
+	if _, err := repo.StoreAtomic(ctx, eventstore.Event{AggregateName: "order", AggregateID: "o1", EventName: "Placed", IdempotencyKey: "cmd-1"}, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if done, err := AlreadyProcessed(ctx, repo, "order", "o1", "cmd-1"); err != nil || !done {
+		t.Errorf("AlreadyProcessed(cmd-1) = %v, %v; want true, nil", done, err)
+	}
+	if done, _ := AlreadyProcessed(ctx, repo, "order", "o1", "cmd-2"); done {
+		t.Error("cmd-2 was never processed")
+	}
+	if done, _ := AlreadyProcessed(ctx, repo, "order", "o1", ""); done {
+		t.Error("empty key must never match")
+	}
+	// Different aggregate id with the same key must not match.
+	if done, _ := AlreadyProcessed(ctx, repo, "order", "o2", "cmd-1"); done {
+		t.Error("key is scoped to the aggregate id")
+	}
+}
+
+func TestOnce_RunsOnceThenNoOps(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	ctx := context.Background()
+	calls := 0
+	cmd := func() error {
+		// The command stores its event WITH the idempotency key so retries
+		// are recognized.
+		_, err := repo.StoreAtomic(ctx, eventstore.Event{
+			AggregateName:  "order",
+			AggregateID:    "o1",
+			EventName:      "Placed",
+			IdempotencyKey: "cmd-1",
+		}, int64(calls))
+		if err != nil {
+			return err
+		}
+		calls++
+		return nil
+	}
+
+	if err := Once(ctx, repo, "order", "o1", "cmd-1", cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := Once(ctx, repo, "order", "o1", "cmd-1", cmd); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("command ran %d times, want 1 (idempotent)", calls)
+	}
+
+	// An empty key disables the guard: fn runs every time.
+	calls = 0
+	always := func() error { calls++; return nil }
+	_ = Once(ctx, repo, "order", "o1", "", always)
+	_ = Once(ctx, repo, "order", "o1", "", always)
+	if calls != 2 {
+		t.Fatalf("empty-key command ran %d times, want 2 (guard disabled)", calls)
+	}
+}

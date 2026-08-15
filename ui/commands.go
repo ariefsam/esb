@@ -172,6 +172,14 @@ var catalog = []CatalogEntry{
 		Build:   buildAddUpcaster,
 	},
 	{
+		ID:          "add-idempotency",
+		Label:       "Add idempotency guard",
+		Description: "Generate a reusable idempotency guard (AlreadyProcessed / Once) so commands can be made safe to retry. Generated once per project.",
+		Fields:      []CommandField{},
+		Preview:     []string{"esb", "add", "idempotency"},
+		Build:       buildAddIdempotency,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -385,6 +393,10 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("name must be snake_case")
 	}
 	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddIdempotency(form FormInput) ([]string, error) {
+	return []string{"esb", "add", "idempotency"}, nil
 }
 
 func buildAddUpcaster(form FormInput) ([]string, error) {

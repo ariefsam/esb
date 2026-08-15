@@ -400,6 +400,35 @@ hanya **menambah** field (field yang hilang jadi zero value). Registry
 
 ---
 
+### `esb add idempotency`
+
+Generate **idempotency guard** yang bisa dipakai ulang (`service/idempotency.go`)
+supaya command aman di-retry. Berbasis `IdempotencyKey` di event stream — tanpa
+tabel tambahan.
+
+```bash
+esb add idempotency
+```
+
+Menghasilkan helper `AlreadyProcessed` + `Once`. Bungkus command:
+
+```go
+func (s *OrderService) Place(ctx context.Context, id, commandID string) error {
+    return service.Once(ctx, s.eventRepo, domain.OrderAggregateName, id, commandID, func() error {
+        agg, err := s.load(ctx, id)
+        if err != nil { return err }
+        // ... validasi invariant ...
+        // simpan event dengan IdempotencyKey = commandID
+        return s.store(ctx, agg, "OrderPlaced", data)
+    })
+}
+```
+
+Submission ganda (retry, dup jaringan) dengan `commandID` sama → dikenali &
+di-skip. Key kosong menonaktifkan guard. Di-generate sekali per proyek.
+
+---
+
 ### `esb show [aggregate-name]`
 
 Cetak ringkasan satu-layar dari proyek saat ini: aggregate + event, handler wiring, projection worker (single/multi), storage & run-workers, dan wire provider graph. Tidak menulis apa-apa — murni baca file hasil generator.

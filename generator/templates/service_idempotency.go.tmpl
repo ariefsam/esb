@@ -1,0 +1,61 @@
+package service
+
+import (
+	"context"
+
+	"{{.ModuleName}}/domain"
+)
+
+// AlreadyProcessed reports whether an event carrying idempotencyKey has already
+// been stored for (aggregateName, aggregateID). Combined with setting that key
+// when you store an event, this makes a command safe to retry: a duplicate
+// submission is recognized and skipped. An empty key never matches.
+//
+// It scans the aggregate's event history, so call it once per command (not in
+// a hot loop) — typically via Once.
+func AlreadyProcessed(ctx context.Context, repo domain.EventRepository, aggregateName, aggregateID, idempotencyKey string) (bool, error) {
+	if idempotencyKey == "" {
+		return false, nil
+	}
+	events, err := repo.Retrieve(ctx, aggregateID, aggregateName, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range events {
+		if e.IdempotencyKey == idempotencyKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Once runs fn exactly once per (aggregateName, aggregateID, idempotencyKey).
+// If an event with that key already exists it returns nil without running fn,
+// so a retried command is a no-op. fn MUST store its event(s) with the SAME
+// idempotencyKey (set domain.Event.IdempotencyKey) so the next retry is
+// recognized. An empty key disables the guard (fn always runs).
+//
+// Example — make a command idempotent by threading a client-supplied command id:
+//
+//	func (s *OrderService) Place(ctx context.Context, id, cmdID string) error {
+//		return Once(ctx, s.eventRepo, domain.OrderAggregateName, id, cmdID, func() error {
+//			agg, err := s.load(ctx, id)
+//			if err != nil {
+//				return err
+//			}
+//			// ... validate invariants ...
+//			return s.storeWithKey(ctx, agg, "OrderPlaced", data, cmdID)
+//		})
+//	}
+func Once(ctx context.Context, repo domain.EventRepository, aggregateName, aggregateID, idempotencyKey string, fn func() error) error {
+	if idempotencyKey != "" {
+		done, err := AlreadyProcessed(ctx, repo, aggregateName, aggregateID, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+	return fn()
+}

@@ -126,6 +126,11 @@ func TestBuildArgv_AcceptedCommands(t *testing.T) {
 			want:    []string{"esb", "add", "upcaster", "order", "OrderPlaced"},
 		},
 		{
+			command: "add-idempotency",
+			form:    FormInput{},
+			want:    []string{"esb", "add", "idempotency"},
+		},
+		{
 			command: "show",
 			form:    FormInput{},
 			want:    []string{"esb", "show"},

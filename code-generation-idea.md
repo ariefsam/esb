@@ -244,7 +244,9 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
    + query by-state, handler, scenario test (transisi valid & ilegal).
 
 **Fase 3 — lintas-aggregate & evolusi.**
-6. **Idempotent** flag + ✅ **upcaster** (`esb add upcaster <agg> <Event>`):
+6. ✅ **Idempotent** (`esb add idempotency`): guard `AlreadyProcessed`/`Once`
+   berbasis `IdempotencyKey` di event stream (tanpa tabel tambahan), opt-in per
+   command. + ✅ **upcaster** (`esb add upcaster <agg> <Event>`):
    registry `domain.Upcast` (no-op sampai ada upcaster), hook di `Replay` semua
    aggregate (rute event lama → Upcast → Apply), fungsi stub + auto-register,
    rantai v1→v2→v3. Diverifikasi end-to-end (event lama tanpa field → default
