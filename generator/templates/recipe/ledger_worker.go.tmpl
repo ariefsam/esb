@@ -1,0 +1,123 @@
+package projection
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+)
+
+// {{.NamePascal}}ProjectionWorker keeps the {{.NamePascal}} balance + statement
+// read models up to date by long-polling the event store.
+type {{.NamePascal}}ProjectionWorker struct {
+	esClient *eventstore.Client
+	db       *gorm.DB
+}
+
+func New{{.NamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
+	return &{{.NamePascal}}ProjectionWorker{esClient: esClient, db: db}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		cursor := w.readCursor(ctx)
+		events, err := w.esClient.EventsAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.Name}} projection: fetch error: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		for _, e := range events {
+			if err := w.applyEvent(ctx, e); err != nil {
+				log.Printf("{{.Name}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
+			}
+		}
+	}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+	var row ProjectionCursorRow
+	w.db.WithContext(ctx).Where("name = ?", "{{.Name}}").First(&row)
+	return row.AfterID
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
+	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch e.EventName {
+		case "{{.NamePascal}}Opened":
+			var evt domain.{{.NamePascal}}Opened
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			row := {{.NamePascal}}BalanceRow{AggregateID: e.AggregateID, Currency: evt.Currency, Balance: 0, Version: e.Version, UpdatedAt: e.TimeMillis}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Deposited":
+			var evt domain.{{.NamePascal}}Deposited
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			if err := w.post(tx, e, "deposit", evt.Amount, evt.Ref); err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Withdrawn":
+			var evt domain.{{.NamePascal}}Withdrawn
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			if err := w.post(tx, e, "withdraw", -evt.Amount, evt.Ref); err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Frozen":
+			if err := tx.Model(&{{.NamePascal}}BalanceRow{}).Where("aggregate_id = ?", e.AggregateID).
+				Updates(map[string]any{"frozen": true, "version": e.Version, "updated_at": e.TimeMillis}).Error; err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Closed":
+			if err := tx.Model(&{{.NamePascal}}BalanceRow{}).Where("aggregate_id = ?", e.AggregateID).
+				Updates(map[string]any{"closed": true, "version": e.Version, "updated_at": e.TimeMillis}).Error; err != nil {
+				return err
+			}
+		}
+
+		cursorCol := clause.Column{Name: "name"}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{cursorCol},
+			DoUpdates: clause.AssignmentColumns([]string{"after_id", "updated_at"}),
+		}).Create(&ProjectionCursorRow{Name: "{{.Name}}", AfterID: int64(e.ID), UpdatedAt: e.TimeMillis}).Error
+	})
+}
+
+// post appends one statement line and applies the balance delta, but only when
+// the line is new (unique EventID) — so re-applying an event is a no-op and the
+// balance is never double-counted. signedAmount is negative for withdrawals.
+func (w *{{.NamePascal}}ProjectionWorker) post(tx *gorm.DB, e eventstore.Event, kind string, signedAmount int64, ref string) error {
+	entry := {{.NamePascal}}EntryRow{EventID: e.ID, AggregateID: e.AggregateID, Kind: kind, Amount: signedAmount, Ref: ref, At: e.TimeMillis}
+	eventCol := clause.Column{Name: "event_id"}
+	res := tx.Clauses(clause.OnConflict{Columns: []clause.Column{eventCol}, DoNothing: true}).Create(&entry)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil // already posted — idempotent no-op
+	}
+	return tx.Model(&{{.NamePascal}}BalanceRow{}).Where("aggregate_id = ?", e.AggregateID).
+		Updates(map[string]any{"balance": gorm.Expr("balance + ?", signedAmount), "version": e.Version, "updated_at": e.TimeMillis}).Error
+}

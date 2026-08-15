@@ -103,6 +103,11 @@ func NewApp() (*App, error) {
 	router := mux.NewRouter()
 	server.RegisterRoutes(router)
 
+	// Services are declared here, above app-init, so that any handler
+	// constructed below can reference a service regardless of the order in
+	// which `esb add handler` injected them.
+	// esb:inject:app-services
+
 	// esb:inject:app-init
 
 	return &App{

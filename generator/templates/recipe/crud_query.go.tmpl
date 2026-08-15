@@ -1,0 +1,23 @@
+package projection
+
+import (
+	"context"
+
+	"gorm.io/gorm"
+)
+
+// List{{.NamePascal}}s returns all non-archived {{.NamePascal}} rows.
+func List{{.NamePascal}}s(ctx context.Context, db *gorm.DB) ([]{{.NamePascal}}Row, error) {
+	var rows []{{.NamePascal}}Row
+	err := db.WithContext(ctx).Where("archived = ?", false).Find(&rows).Error
+	return rows, err
+}
+
+// Get{{.NamePascal}} returns a single {{.NamePascal}} row by its aggregate ID.
+func Get{{.NamePascal}}(ctx context.Context, db *gorm.DB, id string) (*{{.NamePascal}}Row, error) {
+	var row {{.NamePascal}}Row
+	if err := db.WithContext(ctx).Where("aggregate_id = ?", id).First(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}

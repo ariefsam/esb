@@ -54,6 +54,80 @@ type HandlerData struct {
 	AggregateNamePascal string // PascalCase
 }
 
+// CRUDField extends a plain field with a Go literal sample value used by the
+// generated Given-When-Then scenario tests.
+type CRUDField struct {
+	NamePascal string // Go struct field name: "Price"
+	JSONTag    string // json tag / gorm column: "price"
+	Type       string // Go type: "string", "int64", ...
+	Sample     string // Go literal for tests: `"sample"`, `1`, `true`
+}
+
+// CRUDData is passed to the CRUD recipe templates. It describes one entity
+// aggregate (product, customer, …) plus the fields carried by its
+// Created/Updated events and mirrored in the read-model row.
+type CRUDData struct {
+	ModuleName  string
+	PackageName string
+	Name        string // snake_case: "product"
+	NamePascal  string // PascalCase: "Product"
+	NameKebab   string // kebab-case aggregate-store name: "product"
+	Receiver    string // Go receiver variable: "p"
+	TableName   string // snake_case plural: "products"
+	Fields      []CRUDField
+}
+
+// LedgerData is passed to the ledger recipe templates. A ledger has a fixed
+// event shape (Opened/Deposited/Withdrawn/Frozen/Closed), so unlike CRUD it
+// takes no user-defined fields.
+type LedgerData struct {
+	ModuleName     string
+	PackageName    string
+	Name           string // snake_case: "account"
+	NamePascal     string // PascalCase: "Account"
+	NameKebab      string // kebab-case aggregate-store name: "account"
+	Receiver       string // Go receiver variable: "a"
+	TableName      string // balance table: "accounts"
+	EntryTableName string // statement table: "account_entries"
+}
+
+// SMState is one state of a state-machine aggregate.
+type SMState struct {
+	Raw    string // "placed"
+	Pascal string // "Placed"
+	Event  string // "<NamePascal>Placed" — the event emitted when entering it
+}
+
+// SMFromTransitions lists the states reachable from one state.
+type SMFromTransitions struct {
+	From string
+	Tos  []string
+}
+
+// StateMachineData is passed to the state-machine recipe templates.
+type StateMachineData struct {
+	ModuleName       string
+	PackageName      string
+	Name             string // snake_case: "order"
+	NamePascal       string // PascalCase: "Order"
+	NameKebab        string // kebab-case aggregate-store name: "order"
+	Receiver         string // Go receiver variable: "o"
+	TableName        string // snake_case plural: "orders"
+	States           []SMState
+	InitialState     string // raw name of the entry state
+	TransitionGroups []SMFromTransitions
+
+	// Precomputed values for the generated scenario tests.
+	InitialEvent string // event of the initial state
+	HasSecond    bool
+	SecondState  string // a non-initial state (for "invalid from nothing")
+	HasValidTo   bool
+	ValidTo      string // a state reachable from the initial state
+	ValidEvent   string // its event
+	HasInvalidTo bool
+	InvalidTo    string // a state NOT reachable from the initial state
+}
+
 // QueryData is passed to add-query templates.
 type QueryData struct {
 	ModuleName          string

@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,8 +298,3 @@ func modeLabel(mode string) string {
 	}
 	return mode
 }
-
-// readMigrationFromEnv is a sentinel import so the compile-time
-// dependency between this file and cmd stays obvious even when
-// future refactors move the storage helpers around.
-var _ = url.Parse

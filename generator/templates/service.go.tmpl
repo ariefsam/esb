@@ -24,6 +24,8 @@ func New{{.AggregateNamePascal}}Service(repo domain.EventRepository) *{{.Aggrega
 	return &{{.AggregateNamePascal}}Service{eventRepo: repo}
 }
 
+// esb:inject:service-commands
+
 // load rebuilds an aggregate instance from its latest snapshot (if any)
 // plus every event stored after it, falling back to a full replay when
 // no snapshot exists yet.

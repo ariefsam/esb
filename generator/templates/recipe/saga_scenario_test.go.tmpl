@@ -1,0 +1,99 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+	"{{.ModuleName}}/testkit"
+)
+
+// fake{{.NamePascal}}Port records the port calls and can be told to fail either
+// leg, so the scenario tests can drive the happy path, the debit-failure path,
+// and the credit-failure compensation path deterministically.
+type fake{{.NamePascal}}Port struct {
+	failDebit  bool
+	failCredit bool
+	calls      []string
+}
+
+func (p *fake{{.NamePascal}}Port) Debit(ctx context.Context, account string, amount int64, ref string) error {
+	p.calls = append(p.calls, "debit:"+account)
+	if p.failDebit {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func (p *fake{{.NamePascal}}Port) Credit(ctx context.Context, account string, amount int64, ref string) error {
+	p.calls = append(p.calls, "credit:"+account)
+	if p.failCredit {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+// Happy path: both legs succeed and the saga completes.
+func Test{{.NamePascal}}Service_TransferCompletes(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo, &fake{{.NamePascal}}Port{})
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "t-1").
+		When(func(ctx context.Context) error { return svc.Transfer(ctx, "t-1", "alice", "bob", 1000) }).
+		Then(
+			testkit.Event("{{.NamePascal}}Requested", domain.{{.NamePascal}}Requested{From: "alice", To: "bob", Amount: 1000}),
+			testkit.Event("{{.NamePascal}}Debited", domain.{{.NamePascal}}Debited{}),
+			testkit.Event("{{.NamePascal}}Credited", domain.{{.NamePascal}}Credited{}),
+			testkit.Event("{{.NamePascal}}Completed", domain.{{.NamePascal}}Completed{}),
+		)
+}
+
+// Debit fails: the transfer ends Failed and never touches the destination.
+func Test{{.NamePascal}}Service_DebitFailsEndsFailed(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	port := &fake{{.NamePascal}}Port{failDebit: true}
+	svc := New{{.NamePascal}}Service(repo, port)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "t-1").
+		When(func(ctx context.Context) error { return svc.Transfer(ctx, "t-1", "alice", "bob", 1000) }).
+		Then(
+			testkit.Event("{{.NamePascal}}Requested", domain.{{.NamePascal}}Requested{From: "alice", To: "bob", Amount: 1000}),
+			testkit.Event("{{.NamePascal}}Failed", domain.{{.NamePascal}}Failed{Reason: "boom"}),
+		)
+	if len(port.calls) != 1 || port.calls[0] != "debit:alice" {
+		t.Fatalf("port calls = %v, want a single debit:alice", port.calls)
+	}
+}
+
+// Credit fails: the saga compensates by refunding the source and ends
+// Compensated, so no money is lost.
+func Test{{.NamePascal}}Service_CreditFailsCompensates(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	port := &fake{{.NamePascal}}Port{failCredit: true}
+	svc := New{{.NamePascal}}Service(repo, port)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "t-1").
+		When(func(ctx context.Context) error { return svc.Transfer(ctx, "t-1", "alice", "bob", 1000) }).
+		Then(
+			testkit.Event("{{.NamePascal}}Requested", domain.{{.NamePascal}}Requested{From: "alice", To: "bob", Amount: 1000}),
+			testkit.Event("{{.NamePascal}}Debited", domain.{{.NamePascal}}Debited{}),
+			testkit.Event("{{.NamePascal}}Compensated", domain.{{.NamePascal}}Compensated{Reason: "boom"}),
+		)
+	// alice debited, credit to bob attempted, then alice refunded.
+	want := []string{"debit:alice", "credit:bob", "credit:alice"}
+	if len(port.calls) != len(want) {
+		t.Fatalf("port calls = %v, want %v", port.calls, want)
+	}
+	for i := range want {
+		if port.calls[i] != want[i] {
+			t.Fatalf("port calls = %v, want %v", port.calls, want)
+		}
+	}
+}
+
+func Test{{.NamePascal}}Service_InvalidAmountRejected(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo, &fake{{.NamePascal}}Port{})
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "t-1").
+		When(func(ctx context.Context) error { return svc.Transfer(ctx, "t-1", "alice", "bob", 0) }).
+		ThenError(Err{{.NamePascal}}InvalidAmount)
+}

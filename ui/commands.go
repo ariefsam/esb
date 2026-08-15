@@ -108,6 +108,49 @@ var catalog = []CatalogEntry{
 		Build:   buildAddQuery,
 	},
 	{
+		ID:          "add-recipe-crud",
+		Label:       "Add CRUD recipe",
+		Description: "Scaffold a whole CRUD slice: Created/Updated/Archived events, commands, projection, queries, handlers, and tests. snake_case name, field:type pairs.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "product", Required: true, Type: "text", Help: "snake_case entity name"},
+			{Name: "fields", Label: "Fields", Placeholder: "name:string price:int64 sku:string", Type: "list", Help: "one field:type per line"},
+		},
+		Preview: []string{"esb", "add", "recipe", "crud", "product", "name:string", "price:int64", "sku:string"},
+		Build:   buildAddRecipeCRUD,
+	},
+	{
+		ID:          "add-recipe-ledger",
+		Label:       "Add ledger recipe",
+		Description: "Scaffold an append-only ledger account: Open/Deposit/Withdraw/Freeze/Close with a non-negative-balance invariant, statement journal, and tests. snake_case name.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "account", Required: true, Type: "text", Help: "snake_case account name"},
+		},
+		Preview: []string{"esb", "add", "recipe", "ledger", "account"},
+		Build:   buildAddRecipeLedger,
+	},
+	{
+		ID:          "add-recipe-statemachine",
+		Label:       "Add state machine recipe",
+		Description: "Scaffold a lifecycle aggregate with guarded transitions. snake_case name + states; transitions as from->to (one per line).",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "order", Required: true, Type: "text", Help: "snake_case aggregate name"},
+			{Name: "states", Label: "States", Placeholder: "placed\npaid\nshipped\ndelivered\ncancelled", Required: true, Type: "list", Help: "one snake_case state per line; the first is the initial state"},
+			{Name: "transitions", Label: "Transitions", Placeholder: "placed->paid\npaid->shipped", Type: "list", Help: "one from->to per line"},
+		},
+		Preview: []string{"esb", "add", "recipe", "statemachine", "order", "--states", "placed,paid,shipped", "--transitions", "placed->paid,paid->shipped"},
+		Build:   buildAddRecipeStateMachine,
+	},
+	{
+		ID:          "add-recipe-saga",
+		Label:       "Add saga recipe",
+		Description: "Scaffold an orchestration saga: a two-step transfer with compensation (Debit then Credit, refund on failure). snake_case name.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "money_transfer", Required: true, Type: "text", Help: "snake_case saga name"},
+		},
+		Preview: []string{"esb", "add", "recipe", "saga", "money_transfer"},
+		Build:   buildAddRecipeSaga,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -291,6 +334,88 @@ func buildAddQuery(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("aggregate: %w", err)
 	}
 	return []string{"esb", "add", "query", name, "--aggregate", agg}, nil
+}
+
+func buildAddRecipeCRUD(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	fields := form["fields"]
+	for _, f := range fields {
+		if err := validateFieldType(f); err != nil {
+			return nil, fmt.Errorf("field %q: %w", f, err)
+		}
+	}
+	argv := []string{"esb", "add", "recipe", "crud", name}
+	argv = append(argv, fields...)
+	return argv, nil
+}
+
+func buildAddRecipeLedger(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddRecipeSaga(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	return []string{"esb", "add", "recipe", "saga", name}, nil
+}
+
+func buildAddRecipeStateMachine(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	states := form["states"]
+	if len(states) == 0 {
+		return nil, fmt.Errorf("states: at least one state required")
+	}
+	for _, s := range states {
+		if err := validateFieldName(s); err != nil {
+			return nil, fmt.Errorf("state %q: %w", s, err)
+		}
+		if s != naming.ToSnakeCase(s) {
+			return nil, fmt.Errorf("state %q must be snake_case", s)
+		}
+	}
+	// Transitions are "from->to"; validate each side as a plain name so the
+	// only special character that reaches argv is the "->" separator.
+	transitions := form["transitions"]
+	for _, tr := range transitions {
+		parts := strings.SplitN(tr, "->", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("transition %q: expected from->to", tr)
+		}
+		for _, side := range parts {
+			if err := validateFieldName(strings.TrimSpace(side)); err != nil {
+				return nil, fmt.Errorf("transition %q: %w", tr, err)
+			}
+		}
+	}
+	argv := []string{"esb", "add", "recipe", "statemachine", name, "--states", strings.Join(states, ",")}
+	if len(transitions) > 0 {
+		argv = append(argv, "--transitions", strings.Join(transitions, ","))
+	}
+	return argv, nil
 }
 
 func buildShow(form FormInput) ([]string, error) {
@@ -531,10 +656,12 @@ func (ExecRunner) Run(ctx context.Context, projectRoot string, argv []string, st
 // surfaces this as RunTimedOut rather than a generic failure.
 var ErrTimeout = errors.New("command exceeded timeout")
 
-// runStoreCap bounds the number of runs kept in memory. When the
-// store reaches this size Start rejects the new run with ErrStoreFull
-// so a runaway tab cannot exhaust process memory. The value matches
-// the number locked in by Phase 1 of the approved plan.
+// runStoreCap bounds the number of runs kept in memory. When the store
+// reaches this size Start evicts the oldest *completed* run to make room
+// so a long-lived `esb ui` session isn't permanently locked out after
+// runStoreCap executions (the assessment's RunStore-never-evicts finding).
+// Eviction never touches the single in-flight run, so history is bounded
+// without ever discarding a run the UI is actively streaming.
 const runStoreCap = 1000
 
 // RunStore keeps the in-memory map of run id -> *Run. Only one run may
@@ -611,8 +738,13 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 		return nil, ErrConflict
 	}
 	if len(s.runs) >= runStoreCap {
-		s.mu.Unlock()
-		return nil, ErrStoreFull
+		if !s.evictOldestCompletedLocked() {
+			// Every slot is an in-flight run — impossible under the
+			// single-active invariant, but fail safe rather than grow
+			// unbounded.
+			s.mu.Unlock()
+			return nil, ErrStoreFull
+		}
 	}
 	s.active = true
 	run := &Run{
@@ -629,6 +761,27 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 
 	go s.execute(parent, run, runner)
 	return run, nil
+}
+
+// evictOldestCompletedLocked removes the oldest run whose status is no
+// longer RunRunning and reports whether one was evicted. The caller must
+// hold s.mu. It is O(n) but only runs when the store is at capacity.
+func (s *RunStore) evictOldestCompletedLocked() bool {
+	var oldestID string
+	var oldestAt time.Time
+	for id, r := range s.runs {
+		if r.Status == RunRunning {
+			continue
+		}
+		if oldestID == "" || r.StartedAt.Before(oldestAt) {
+			oldestID, oldestAt = id, r.StartedAt
+		}
+	}
+	if oldestID == "" {
+		return false
+	}
+	delete(s.runs, oldestID)
+	return true
 }
 
 // ErrConflict signals that the UI rejected a second run while one is

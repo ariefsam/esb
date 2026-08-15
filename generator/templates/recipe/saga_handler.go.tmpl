@@ -1,0 +1,46 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"{{.ModuleName}}/service"
+)
+
+// {{.NamePascal}}Handler exposes the {{.NamePascal}} saga trigger over HTTP.
+type {{.NamePascal}}Handler struct {
+	svc *service.{{.NamePascal}}Service
+}
+
+func New{{.NamePascal}}Handler(svc *service.{{.NamePascal}}Service) *{{.NamePascal}}Handler {
+	return &{{.NamePascal}}Handler{svc: svc}
+}
+
+// Transfer handles POST: body {"id": "...", "from": "...", "to": "...", "amount": 1000}.
+// The saga runs to completion; query Get{{.NamePascal}} to learn the outcome
+// (completed / failed / compensated).
+func (h *{{.NamePascal}}Handler) Transfer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID     string `json:"id"`
+		From   string `json:"from"`
+		To     string `json:"to"`
+		Amount int64  `json:"amount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Transfer(r.Context(), req.ID, req.From, req.To, req.Amount); err != nil {
+		switch {
+		case errors.Is(err, service.Err{{.NamePascal}}Exists):
+			writeError(w, http.StatusConflict, err)
+		case errors.Is(err, service.Err{{.NamePascal}}InvalidAmount):
+			writeError(w, http.StatusBadRequest, err)
+		default:
+			writeError(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "accepted"})
+}

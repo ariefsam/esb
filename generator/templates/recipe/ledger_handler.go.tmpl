@@ -1,0 +1,128 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"{{.ModuleName}}/service"
+)
+
+// {{.NamePascal}}Handler exposes the write-side ledger commands over HTTP.
+type {{.NamePascal}}Handler struct {
+	svc *service.{{.NamePascal}}Service
+}
+
+func New{{.NamePascal}}Handler(svc *service.{{.NamePascal}}Service) *{{.NamePascal}}Handler {
+	return &{{.NamePascal}}Handler{svc: svc}
+}
+
+// Open handles POST: body {"id": "...", "currency": "USD"}.
+func (h *{{.NamePascal}}Handler) Open(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID       string `json:"id"`
+		Currency string `json:"currency"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Open(r.Context(), req.ID, req.Currency); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "status": "opened"})
+}
+
+// Deposit handles POST: body {"id": "...", "amount": 1000, "ref": "..."}.
+func (h *{{.NamePascal}}Handler) Deposit(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode{{.NamePascal}}Amount(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.Deposit(r.Context(), req.ID, req.Amount, req.Ref); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "deposited"})
+}
+
+// Withdraw handles POST: body {"id": "...", "amount": 1000, "ref": "..."}.
+func (h *{{.NamePascal}}Handler) Withdraw(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode{{.NamePascal}}Amount(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.Withdraw(r.Context(), req.ID, req.Amount, req.Ref); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "withdrawn"})
+}
+
+type {{.NamePascal}}AmountRequest struct {
+	ID     string `json:"id"`
+	Amount int64  `json:"amount"`
+	Ref    string `json:"ref"`
+}
+
+// decode{{.NamePascal}}Amount parses the shared deposit/withdraw request body, writing a 400
+// and returning ok=false on malformed input.
+func decode{{.NamePascal}}Amount(w http.ResponseWriter, r *http.Request) ({{.NamePascal}}AmountRequest, bool) {
+	var req {{.NamePascal}}AmountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return req, false
+	}
+	return req, true
+}
+
+// Freeze handles POST: body {"id": "..."}.
+func (h *{{.NamePascal}}Handler) Freeze(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Freeze(r.Context(), req.ID); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "frozen"})
+}
+
+// Close handles POST: body {"id": "..."}.
+func (h *{{.NamePascal}}Handler) Close(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Close(r.Context(), req.ID); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "closed"})
+}
+
+// write{{.NamePascal}}Error maps ledger command errors to HTTP status codes.
+func write{{.NamePascal}}Error(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.Err{{.NamePascal}}Exists):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, service.Err{{.NamePascal}}NotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, service.Err{{.NamePascal}}Frozen):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, service.Err{{.NamePascal}}InvalidAmount):
+		writeError(w, http.StatusBadRequest, err)
+	case errors.Is(err, service.Err{{.NamePascal}}InsufficientFunds):
+		writeError(w, http.StatusUnprocessableEntity, err)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}

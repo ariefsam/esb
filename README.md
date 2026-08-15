@@ -292,6 +292,79 @@ func GetOrderByBuyer(ctx context.Context, db *gorm.DB, buyerID string) ([]OrderR
 
 ---
 
+### `esb add recipe <kind> ...`
+
+Recipe men-scaffold **satu pola event-sourcing lengkap** dalam satu langkah —
+bukan satu komponen — termasuk command, projection, query, handler, dan
+scenario test Given-When-Then. Semua ditulis dalam satu transaksi yang
+atomik: kalau ada bagian gagal, tidak ada file yang ditulis.
+
+Tersedia juga dari web UI (`esb ui`).
+
+#### `esb add recipe crud <name> [field:type ...]`
+
+Entity CRUD dengan **soft delete** (bukan hapus baris).
+
+```bash
+esb add recipe crud product name:string price:int64 sku:string
+```
+
+Menghasilkan: aggregate + event `Created`/`Updated`/`Archived`, service dengan
+command `Create`/`Update`/`Archive` (invariant di aggregate: sudah-ada /
+tidak-ada, Archive idempoten), read model + projection worker, query
+`List<Name>s`/`Get<Name>`, handler HTTP write-side, dan scenario test (jalur
+sukses + gagal).
+
+#### `esb add recipe ledger <name>`
+
+Akun ledger append-only — contoh kanonik event sourcing (invariant + concurrency).
+
+```bash
+esb add recipe ledger account
+```
+
+Menghasilkan: event `Opened`/`Deposited`/`Withdrawn`/`Frozen`/`Closed`, command
+`Open`/`Deposit`/`Withdraw`/`Freeze`/`Close` dengan **invariant saldo
+non-negatif** (uang `int64` minor unit, bukan float), balance read model +
+statement journal yang **idempoten**, query saldo/mutasi, handler, dan scenario
+test termasuk **concurrency no-double-spend** (lolos `-race`).
+
+#### `esb add recipe statemachine <name> --states ... --transitions ...`
+
+Aggregate lifecycle dengan transisi berpenjaga.
+
+```bash
+esb add recipe statemachine order \
+  --states placed,paid,shipped,delivered,cancelled \
+  --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"
+```
+
+State di-derive murni dari event. Menghasilkan: satu event per state +
+transition table, command `Transition(ctx, id, to)` yang **menolak transisi
+ilegal & state tak dikenal**, read model current-state + query by-state,
+handler, dan scenario test (transisi valid & ilegal). `--states` pertama adalah
+state awal (satu-satunya yang boleh dimasuki aggregate baru).
+
+#### `esb add recipe saga <name>`
+
+Orchestration saga (process manager): transfer dua-langkah dengan **kompensasi**.
+
+```bash
+esb add recipe saga money_transfer
+```
+
+Menghasilkan: aggregate saga (Requested→Debited→Credited→Completed, atau
+→Failed / →Compensated), command `Transfer(ctx, id, from, to, amount)` yang
+menggerakkan Debit lalu Credit lewat sebuah **`<Name>Port` interface**, dan
+**me-refund source** kalau credit gagal (tak ada uang hilang). Kegagalan leg
+adalah *outcome domain* (event Failed/Compensated), bukan error Go. Sebuah stub
+port yang hanya nge-log ikut di-generate & di-wire agar proyek langsung
+compile — ganti dengan adapter asli (mis. yang memanggil `AccountService`).
+Termasuk read model + query by-state, handler, dan scenario test (happy /
+debit-gagal / credit-gagal-kompensasi).
+
+---
+
 ### `esb show [aggregate-name]`
 
 Cetak ringkasan satu-layar dari proyek saat ini: aggregate + event, handler wiring, projection worker (single/multi), storage & run-workers, dan wire provider graph. Tidak menulis apa-apa — murni baca file hasil generator.

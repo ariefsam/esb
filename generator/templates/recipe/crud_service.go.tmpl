@@ -1,0 +1,146 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"{{.ModuleName}}/domain"
+)
+
+// {{.NamePascal}}SnapshotInterval controls how often store() persists a full
+// aggregate snapshot to speed up load().
+const {{.NamePascal}}SnapshotInterval = 100
+
+var (
+	// Err{{.NamePascal}}NotFound is returned by Update/Archive when the entity
+	// does not exist (or was already archived).
+	Err{{.NamePascal}}NotFound = errors.New("{{.NameKebab}} not found")
+	// Err{{.NamePascal}}Exists is returned by Create when the entity already
+	// exists.
+	Err{{.NamePascal}}Exists = errors.New("{{.NameKebab}} already exists")
+)
+
+// {{.NamePascal}}Input carries the mutable fields for Create and Update.
+type {{.NamePascal}}Input struct {
+{{range .Fields}}	{{.NamePascal}} {{.Type}} `json:"{{.JSONTag}}"`
+{{end}}}
+
+// {{.NamePascal}}Service handles commands for the {{.NamePascal}} aggregate.
+type {{.NamePascal}}Service struct {
+	eventRepo domain.EventRepository
+}
+
+func New{{.NamePascal}}Service(repo domain.EventRepository) *{{.NamePascal}}Service {
+	return &{{.NamePascal}}Service{eventRepo: repo}
+}
+
+// Create records a {{.NamePascal}}Created event. It fails if the aggregate
+// already exists (invariant checked on the loaded state, so a concurrent
+// create loses on the optimistic-version check in store()).
+func (s *{{.NamePascal}}Service) Create(ctx context.Context, id string, in {{.NamePascal}}Input) error {
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if agg.Version > 0 {
+		return Err{{.NamePascal}}Exists
+	}
+	return s.store(ctx, agg, "{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}		{{.NamePascal}}: in.{{.NamePascal}},
+{{end}}	})
+}
+
+// Update records a {{.NamePascal}}Updated event. It fails if the aggregate
+// does not exist or has been archived.
+func (s *{{.NamePascal}}Service) Update(ctx context.Context, id string, in {{.NamePascal}}Input) error {
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !agg.Exists() {
+		return Err{{.NamePascal}}NotFound
+	}
+	return s.store(ctx, agg, "{{.NamePascal}}Updated", domain.{{.NamePascal}}Updated{
+{{range .Fields}}		{{.NamePascal}}: in.{{.NamePascal}},
+{{end}}	})
+}
+
+// Archive records a {{.NamePascal}}Archived event (soft delete). It fails if
+// the aggregate never existed, and is idempotent when already archived (a
+// retried Archive is a no-op success rather than an error).
+func (s *{{.NamePascal}}Service) Archive(ctx context.Context, id string) error {
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if agg.Version == 0 {
+		return Err{{.NamePascal}}NotFound
+	}
+	if agg.Archived {
+		return nil
+	}
+	return s.store(ctx, agg, "{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{})
+}
+
+// esb:inject:service-commands
+
+// load rebuilds an aggregate from its latest snapshot (if any) plus every
+// event stored after it, falling back to a full replay when no snapshot exists.
+func (s *{{.NamePascal}}Service) load(ctx context.Context, id string) (*domain.{{.NamePascal}}, error) {
+	agg := domain.New{{.NamePascal}}()
+	agg.AggregateID = id
+
+	var afterVersion int64
+	snap, err := s.eventRepo.LatestSnapshot(ctx, id, domain.{{.NamePascal}}AggregateName)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(snap.State, agg); err != nil {
+			return nil, fmt.Errorf("restore snapshot: %w", err)
+		}
+		afterVersion = snap.Version
+	case errors.Is(err, domain.ErrSnapshotNotFound):
+		// No snapshot yet; replay from the beginning.
+	default:
+		return nil, fmt.Errorf("load snapshot: %w", err)
+	}
+
+	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.NamePascal}}AggregateName, afterVersion)
+	if err != nil {
+		return nil, err
+	}
+	return agg, agg.Replay(events)
+}
+
+// store appends one event with optimistic locking, applies it to agg, and
+// periodically snapshots so future load() calls can skip ahead.
+func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	expectedVersion := agg.Version
+	e := domain.Event{
+		AggregateName: domain.{{.NamePascal}}AggregateName,
+		AggregateID:   agg.AggregateID,
+		EventName:     eventName,
+		Version:       expectedVersion + 1,
+		Data:          b,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
+		return err
+	}
+	if err := agg.Apply(eventName, b); err != nil {
+		return err
+	}
+
+	if agg.Version > 0 && agg.Version%{{.NamePascal}}SnapshotInterval == 0 {
+		if state, err := json.Marshal(agg); err == nil {
+			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.NamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
+		}
+	}
+	return nil
+}

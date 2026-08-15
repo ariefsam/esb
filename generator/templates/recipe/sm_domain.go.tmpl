@@ -1,0 +1,96 @@
+package domain
+
+import "encoding/json"
+
+const {{.NamePascal}}AggregateName = "{{.NameKebab}}"
+
+// {{.NamePascal}} state constants.
+const (
+{{range .States}}	{{$.NamePascal}}State{{.Pascal}} = "{{.Raw}}"
+{{end}})
+
+// {{.Name}}InitialState is the only state a new {{.NamePascal}} may enter.
+const {{.Name}}InitialState = "{{.InitialState}}"
+
+// {{.Name}}Transitions maps each state to the states it may move to.
+var {{.Name}}Transitions = map[string][]string{
+{{range .TransitionGroups}}	{{.From}}: { {{range $i, $t := .Tos}}{{if $i}}, {{end}}{{$t}}{{end}} },
+{{end}}}
+
+// {{.NamePascal}} is a state-machine aggregate; State is derived purely from
+// the events that have been applied.
+type {{.NamePascal}} struct {
+	AggregateID string
+	Version     int64
+	State       string
+}
+
+// New{{.NamePascal}} returns an empty aggregate ready for Replay.
+func New{{.NamePascal}}() *{{.NamePascal}} { return &{{.NamePascal}}{} }
+
+// Apply sets the current state from the entered-state event.
+func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessage) error {
+	switch eventName {
+{{range .States}}	case "{{.Event}}":
+		{{$.Receiver}}.State = {{$.NamePascal}}State{{.Pascal}}
+		{{$.Receiver}}.Version++
+		return nil
+{{end}}	default:
+		return nil
+	}
+}
+
+// Replay rebuilds aggregate state by replaying events from the store.
+func ({{.Receiver}} *{{.NamePascal}}) Replay(events []Event) error {
+	for _, e := range events {
+		if err := {{.Receiver}}.Apply(e.EventName, e.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Exists reports whether the aggregate has entered its initial state.
+func ({{.Receiver}} *{{.NamePascal}}) Exists() bool { return {{.Receiver}}.Version > 0 }
+
+// CanTransition reports whether the aggregate may move to state `to`. From a
+// fresh aggregate only the initial state is reachable; otherwise `to` must be
+// listed in the transition table for the current state.
+func ({{.Receiver}} *{{.NamePascal}}) CanTransition(to string) bool {
+	if {{.Receiver}}.Version == 0 {
+		return to == {{.Name}}InitialState
+	}
+	for _, t := range {{.Name}}Transitions[{{.Receiver}}.State] {
+		if t == to {
+			return true
+		}
+	}
+	return false
+}
+
+// {{.NamePascal}}EventFor returns the event name emitted when entering state
+// `to`, or "" if `to` is not a known state.
+func {{.NamePascal}}EventFor(to string) string {
+	switch to {
+{{range .States}}	case {{$.NamePascal}}State{{.Pascal}}:
+		return "{{.Event}}"
+{{end}}	default:
+		return ""
+	}
+}
+
+// {{.NamePascal}}StateFor returns the state entered by an event name, or "" if
+// the event is not a {{.NamePascal}} state event.
+func {{.NamePascal}}StateFor(eventName string) string {
+	switch eventName {
+{{range .States}}	case "{{.Event}}":
+		return {{$.NamePascal}}State{{.Pascal}}
+{{end}}	default:
+		return ""
+	}
+}
+
+{{range .States}}// {{.Event}} event.
+type {{.Event}} struct{}
+
+{{end}}

@@ -1,0 +1,14 @@
+package projection
+
+// {{.NamePascal}}Row is the read model for the {{.NamePascal}} saga.
+type {{.NamePascal}}Row struct {
+	AggregateID string `gorm:"primaryKey" json:"aggregate_id"`
+	State       string `gorm:"column:state;index" json:"state"`
+	From        string `gorm:"column:from_account" json:"from"`
+	To          string `gorm:"column:to_account" json:"to"`
+	Amount      int64  `gorm:"column:amount" json:"amount"`
+	Version     int64  `gorm:"not null;default:0" json:"version"`
+	UpdatedAt   int64  `gorm:"not null;default:0" json:"updated_at"`
+}
+
+func ({{.NamePascal}}Row) TableName() string { return "{{.TableName}}" }

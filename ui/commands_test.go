@@ -96,6 +96,26 @@ func TestBuildArgv_AcceptedCommands(t *testing.T) {
 			want:    []string{"esb", "add", "query", "orders_by_buyer", "--aggregate", "order"},
 		},
 		{
+			command: "add-recipe-crud",
+			form:    FormInput{"name": {"product"}, "fields": {"name:string", "price:int64"}},
+			want:    []string{"esb", "add", "recipe", "crud", "product", "name:string", "price:int64"},
+		},
+		{
+			command: "add-recipe-ledger",
+			form:    FormInput{"name": {"account"}},
+			want:    []string{"esb", "add", "recipe", "ledger", "account"},
+		},
+		{
+			command: "add-recipe-statemachine",
+			form:    FormInput{"name": {"order"}, "states": {"placed", "paid"}, "transitions": {"placed->paid"}},
+			want:    []string{"esb", "add", "recipe", "statemachine", "order", "--states", "placed,paid", "--transitions", "placed->paid"},
+		},
+		{
+			command: "add-recipe-saga",
+			form:    FormInput{"name": {"money_transfer"}},
+			want:    []string{"esb", "add", "recipe", "saga", "money_transfer"},
+		},
+		{
 			command: "show",
 			form:    FormInput{},
 			want:    []string{"esb", "show"},
@@ -132,6 +152,16 @@ func TestBuildArgv_RejectsInvalidNames(t *testing.T) {
 		{"add-projection", FormInput{"name": {"x"}, "aggregates": {"bad name"}}},
 		{"add-handler", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
 		{"add-query", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
+		{"add-recipe-crud", FormInput{"name": {"Product"}}},                                  // not snake_case
+		{"add-recipe-crud", FormInput{"name": {"product;rm -rf /"}}},                         // shell metachar
+		{"add-recipe-crud", FormInput{"name": {"product"}, "fields": {"price;evil"}}},        // bad field
+		{"add-recipe-ledger", FormInput{"name": {"Account"}}},                                // not snake_case
+		{"add-recipe-ledger", FormInput{"name": {"account;rm -rf /"}}},                       // shell metachar
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {}}},              // no states
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"Placed"}}},      // state not snake
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"placed"}, "transitions": {"placed;paid"}}}, // bad transition
+		{"add-recipe-saga", FormInput{"name": {"Money"}}},          // not snake_case
+		{"add-recipe-saga", FormInput{"name": {"money;rm -rf /"}}}, // shell metachar
 		{"show", FormInput{"aggregate": {"bad name"}}},
 	}
 	for _, tc := range cases {

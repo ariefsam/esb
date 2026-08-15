@@ -83,6 +83,18 @@ Set via `EVENT_STORE_MODE` in `.env`:
 This project is meant to be extended using the `esb` CLI (`esb add
 aggregate|event|handler ...`), not by hand-rolling the same boilerplate.
 
+For whole common patterns, prefer a **recipe** over wiring components by hand —
+each generates a complete, tested vertical slice in one atomic step:
+
+- `esb add recipe crud <name> [field:type ...]` — entity CRUD with soft delete
+  (Create/Update/Archive), read model, queries, handler, scenario tests.
+- `esb add recipe ledger <name>` — append-only account (Open/Deposit/Withdraw/
+  Freeze/Close) with a non-negative-balance invariant and a statement journal.
+- `esb add recipe statemachine <name> --states ... --transitions ...` — a
+  lifecycle aggregate with a transition table that rejects illegal moves.
+- `esb add recipe saga <name>` — an orchestration saga: a two-step transfer
+  through a Port interface that compensates (refunds) when the second leg fails.
+
 **Run `esb --help` and `esb <command> --help` for the authoritative,
 up-to-date usage** — available commands and flags may have changed since
 this file was generated. If `esb` isn't installed, run

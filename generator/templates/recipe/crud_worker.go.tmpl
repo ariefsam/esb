@@ -1,0 +1,113 @@
+package projection
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+)
+
+// {{.NamePascal}}ProjectionWorker keeps the {{.NamePascal}} read model up to
+// date by long-polling the event store and applying events transactionally.
+type {{.NamePascal}}ProjectionWorker struct {
+	esClient *eventstore.Client
+	db       *gorm.DB
+}
+
+func New{{.NamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
+	return &{{.NamePascal}}ProjectionWorker{esClient: esClient, db: db}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		cursor := w.readCursor(ctx)
+		events, err := w.esClient.EventsAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.Name}} projection: fetch error: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		for _, e := range events {
+			if err := w.applyEvent(ctx, e); err != nil {
+				log.Printf("{{.Name}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
+			}
+		}
+	}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+	var row ProjectionCursorRow
+	w.db.WithContext(ctx).Where("name = ?", "{{.Name}}").First(&row)
+	return row.AfterID
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
+	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch e.EventName {
+		case "{{.NamePascal}}Created":
+			var evt domain.{{.NamePascal}}Created
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			row := {{.NamePascal}}Row{
+				AggregateID: e.AggregateID,
+{{range .Fields}}				{{.NamePascal}}: evt.{{.NamePascal}},
+{{end}}				Archived:  false,
+				Version:   e.Version,
+				CreatedAt: e.TimeMillis,
+				UpdatedAt: e.TimeMillis,
+			}
+			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error; err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Updated":
+			var evt domain.{{.NamePascal}}Updated
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			updates := map[string]any{
+{{range .Fields}}				"{{.JSONTag}}": evt.{{.NamePascal}},
+{{end}}				"version":    e.Version,
+				"updated_at": e.TimeMillis,
+			}
+			if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).Updates(updates).Error; err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Archived":
+			updates := map[string]any{
+				"archived":   true,
+				"version":    e.Version,
+				"updated_at": e.TimeMillis,
+			}
+			if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+
+		cursorCol := clause.Column{Name: "name"}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{cursorCol},
+			DoUpdates: clause.AssignmentColumns([]string{"after_id", "updated_at"}),
+		}).Create(&ProjectionCursorRow{
+			Name:      "{{.Name}}",
+			AfterID:   int64(e.ID),
+			UpdatedAt: e.TimeMillis,
+		}).Error
+	})
+}
