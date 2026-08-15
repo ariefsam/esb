@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"strconv"
+	"strings"
 )
 
 // The removal primitives are AST-based (go/parser), not string/regex, so an
@@ -142,6 +143,78 @@ func removeSwitchCase(src, funcName, caseValue string) (string, error) {
 		return "", fmt.Errorf("case %q not found in %s", caseValue, funcName)
 	}
 	return cutNode(src, fset, target.Pos(), target.End()), nil
+}
+
+func hasTypeDecl(src, typeName string) (bool, error) {
+	_, f, err := parseSrc(src)
+	if err != nil {
+		return false, err
+	}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func hasFuncDecl(src, funcName string) (bool, error) {
+	_, f, err := parseSrc(src)
+	if err != nil {
+		return false, err
+	}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == funcName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasSwitchCase(src, funcName, caseValue string) (bool, error) {
+	_, err := removeSwitchCase(src, funcName, caseValue)
+	if err == nil {
+		return true, nil
+	}
+	// Distinguish "not found" (ok, false) from a parse error (propagate).
+	if strings.HasPrefix(err.Error(), "parse ") {
+		return false, err
+	}
+	return false, nil
+}
+
+// HasTypeDecl reports whether path declares the given top-level type.
+func (t *Tx) HasTypeDecl(path, typeName string) (bool, error) {
+	f, err := t.get(path)
+	if err != nil {
+		return false, err
+	}
+	return hasTypeDecl(f.content, typeName)
+}
+
+// HasFuncDecl reports whether path declares the given top-level function.
+func (t *Tx) HasFuncDecl(path, funcName string) (bool, error) {
+	f, err := t.get(path)
+	if err != nil {
+		return false, err
+	}
+	return hasFuncDecl(f.content, funcName)
+}
+
+// HasSwitchCase reports whether the named function in path has a case for
+// caseValue.
+func (t *Tx) HasSwitchCase(path, funcName, caseValue string) (bool, error) {
+	f, err := t.get(path)
+	if err != nil {
+		return false, err
+	}
+	return hasSwitchCase(f.content, funcName, caseValue)
 }
 
 // RemoveTypeDecl stages the removal of a top-level type declaration in path.
