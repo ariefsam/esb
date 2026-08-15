@@ -41,6 +41,11 @@ type CatalogEntry struct {
 	Fields      []CommandField
 	Preview     []string
 	Build       func(form FormInput) ([]string, error)
+	// Hidden entries are not shown on the /commands page and are rejected by
+	// the generic execute endpoint — they can only be started from a dedicated
+	// handler that enforces its own preconditions (e.g. delete-event, which
+	// must run the stored-data check first).
+	Hidden bool
 }
 
 // FormInput is the parsed set of field values for one command. List
@@ -180,6 +185,20 @@ var catalog = []CatalogEntry{
 		Build:       buildAddIdempotency,
 	},
 	{
+		// Hidden: only runnable via the aggregate page's delete-confirm flow,
+		// which checks stored event data first. Not shown on /commands.
+		ID:          "delete-event",
+		Label:       "Delete event",
+		Description: "Remove an event's code from an aggregate (stored data untouched).",
+		Fields: []CommandField{
+			{Name: "aggregate", Label: "Aggregate", Type: "text", Required: true},
+			{Name: "event", Label: "Event name", Type: "text", Required: true},
+		},
+		Preview: []string{"esb", "delete", "event", "order", "OrderPlaced"},
+		Build:   buildDeleteEvent,
+		Hidden:  true,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -237,6 +256,9 @@ func findCommand(id string) *CatalogEntry {
 func PublicCommands() []CommandView {
 	out := make([]CommandView, 0, len(catalog))
 	for _, c := range catalog {
+		if c.Hidden {
+			continue
+		}
 		out = append(out, CommandView{
 			ID:          c.ID,
 			Label:       c.Label,
@@ -319,6 +341,9 @@ func PublicCommandGroups() []CommandGroup {
 	for _, g := range commandGroups {
 		grp := CommandGroup{Title: g.title, Intro: g.intro}
 		for _, c := range catalog {
+			if c.Hidden {
+				continue
+			}
 			gid := commandGroupOf[c.ID]
 			if gid == g.id || (gid == "" && g.id == lastGroupID) {
 				grp.Commands = append(grp.Commands, byID[c.ID])
@@ -480,6 +505,21 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 
 func buildAddIdempotency(form FormInput) ([]string, error) {
 	return []string{"esb", "add", "idempotency"}, nil
+}
+
+func buildDeleteEvent(form FormInput) ([]string, error) {
+	agg := onlyValue(form, "aggregate")
+	if err := validateFieldName(agg); err != nil {
+		return nil, fmt.Errorf("aggregate: %w", err)
+	}
+	event := onlyValue(form, "event")
+	if err := validateFieldName(event); err != nil {
+		return nil, fmt.Errorf("event: %w", err)
+	}
+	if naming.ToPascalCase(event) != event {
+		return nil, fmt.Errorf("event name must be PascalCase")
+	}
+	return []string{"esb", "delete", "event", agg, event}, nil
 }
 
 func buildAddUpcaster(form FormInput) ([]string, error) {

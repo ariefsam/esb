@@ -265,6 +265,8 @@ func (s *Server) renderBody(page interface{}) string {
 		tmplName = "storage"
 	case MigrateFormPage:
 		tmplName = "migrate"
+	case DeleteEventPage:
+		tmplName = "delete_event"
 	case ErrorPage:
 		tmplName = "error"
 	default:

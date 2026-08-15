@@ -8,7 +8,10 @@
   <h2>Events</h2>
   {{if .EventDetails}}
   {{range .EventDetails}}
-  <h3><code>{{.Name}}</code></h3>
+  <div class="event-head">
+    <h3><code>{{.Name}}</code></h3>
+    <a class="btn-danger-sm" href="/aggregates/{{$.Name}}/events/{{.Name}}/delete">Delete</a>
+  </div>
   {{if .Fields}}
   <table>
     <thead><tr><th>Field</th><th>Type</th><th>JSON</th></tr></thead>
@@ -29,6 +32,28 @@
   {{else}}
   <p class="muted">(0 events)</p>
   {{end}}
+</section>
+
+<section class="cmd">
+  <h3>Add event</h3>
+  <p class="muted">Tambah event ke aggregate ini. Aggregate sudah terisi otomatis.</p>
+  <form method="POST" action="/commands/execute" data-cmd="add-event">
+    <input type="hidden" name="command" value="add-event">
+    <input type="hidden" name="aggregate" value="{{.FileName}}" data-field-name="aggregate" data-field-type="text">
+    <div class="grid">
+      <label>
+        <span>Event name * <small class="muted">PascalCase</small></span>
+        <input type="text" name="event" data-field-name="event" data-field-type="text" placeholder="OrderPlaced" required>
+      </label>
+      <label>
+        <span>Fields</span>
+        <textarea name="fields" data-field-name="fields" data-field-type="list" rows="3" placeholder="amount:int64&#10;currency:string"></textarea>
+        <small class="muted">satu <code>field:type</code> per baris</small>
+      </label>
+    </div>
+    <div class="preview"><strong>preview:</strong> <code data-preview></code></div>
+    <div class="form-actions"><button type="submit">Add event</button></div>
+  </form>
 </section>
 
 <section>
