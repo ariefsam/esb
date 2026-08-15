@@ -1,0 +1,100 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"{{.ModuleName}}/domain"
+)
+
+const {{.NamePascal}}SnapshotInterval = 100
+
+var (
+	Err{{.NamePascal}}NotFound          = errors.New("{{.NameKebab}} not found")
+	Err{{.NamePascal}}UnknownState      = errors.New("unknown {{.NameKebab}} state")
+	Err{{.NamePascal}}InvalidTransition = errors.New("invalid {{.NameKebab}} state transition")
+)
+
+// {{.NamePascal}}Service drives the {{.NamePascal}} state machine.
+type {{.NamePascal}}Service struct {
+	eventRepo domain.EventRepository
+}
+
+func New{{.NamePascal}}Service(repo domain.EventRepository) *{{.NamePascal}}Service {
+	return &{{.NamePascal}}Service{eventRepo: repo}
+}
+
+// Transition moves the aggregate to state `to`. It rejects unknown states and
+// transitions the state machine does not allow (guard enforced on the loaded
+// state; a concurrent transition loses on the optimistic-version check).
+func (s *{{.NamePascal}}Service) Transition(ctx context.Context, id, to string) error {
+	eventName := domain.{{.NamePascal}}EventFor(to)
+	if eventName == "" {
+		return Err{{.NamePascal}}UnknownState
+	}
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !agg.CanTransition(to) {
+		return Err{{.NamePascal}}InvalidTransition
+	}
+	return s.store(ctx, agg, eventName, struct{}{})
+}
+
+// esb:inject:service-commands
+
+func (s *{{.NamePascal}}Service) load(ctx context.Context, id string) (*domain.{{.NamePascal}}, error) {
+	agg := domain.New{{.NamePascal}}()
+	agg.AggregateID = id
+
+	var afterVersion int64
+	snap, err := s.eventRepo.LatestSnapshot(ctx, id, domain.{{.NamePascal}}AggregateName)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(snap.State, agg); err != nil {
+			return nil, fmt.Errorf("restore snapshot: %w", err)
+		}
+		afterVersion = snap.Version
+	case errors.Is(err, domain.ErrSnapshotNotFound):
+	default:
+		return nil, fmt.Errorf("load snapshot: %w", err)
+	}
+
+	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.NamePascal}}AggregateName, afterVersion)
+	if err != nil {
+		return nil, err
+	}
+	return agg, agg.Replay(events)
+}
+
+func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	expectedVersion := agg.Version
+	e := domain.Event{
+		AggregateName: domain.{{.NamePascal}}AggregateName,
+		AggregateID:   agg.AggregateID,
+		EventName:     eventName,
+		Version:       expectedVersion + 1,
+		Data:          b,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
+		return err
+	}
+	if err := agg.Apply(eventName, b); err != nil {
+		return err
+	}
+	if agg.Version > 0 && agg.Version%{{.NamePascal}}SnapshotInterval == 0 {
+		if state, err := json.Marshal(agg); err == nil {
+			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.NamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
+		}
+	}
+	return nil
+}

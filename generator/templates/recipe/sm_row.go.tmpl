@@ -1,0 +1,12 @@
+package projection
+
+// {{.NamePascal}}Row is the read model for the {{.NamePascal}} state machine.
+type {{.NamePascal}}Row struct {
+	AggregateID string `gorm:"primaryKey" json:"aggregate_id"`
+	State       string `gorm:"column:state;index" json:"state"`
+	Version     int64  `gorm:"not null;default:0" json:"version"`
+	CreatedAt   int64  `gorm:"not null;default:0" json:"created_at"`
+	UpdatedAt   int64  `gorm:"not null;default:0" json:"updated_at"`
+}
+
+func ({{.NamePascal}}Row) TableName() string { return "{{.TableName}}" }

@@ -238,7 +238,10 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
    Freeze/Close, invariant saldo non-negatif (uang int64 minor unit), balance
    read model + statement journal idempoten, query balance/statement, handler,
    dan scenario test termasuk **concurrency no-double-spend** (lolos `-race`).
-5. **State machine** (transisi + guard).
+5. ✅ **State machine** (`esb add recipe statemachine <name> --states … --transitions …`):
+   satu event per state + transition table, command `Transition(ctx, id, to)`
+   berpenjaga (tolak transisi ilegal & unknown state), read model current-state
+   + query by-state, handler, scenario test (transisi valid & ilegal).
 
 **Fase 3 — lintas-aggregate & evolusi.**
 6. **Idempotent** flag + **upcaster** (nilai tinggi, effort rendah).

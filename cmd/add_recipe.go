@@ -16,13 +16,50 @@ pattern instead of a single component. Everything is written in one atomic
 step — if any part fails, nothing is written.
 
 Available recipes:
-  crud   <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
-  ledger <name>                    append-only account: Open/Deposit/Withdraw/Freeze/Close
+  crud         <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
+  ledger       <name>                     append-only account: Open/Deposit/Withdraw/Freeze/Close
+  statemachine <name> --states --transitions   guarded lifecycle transitions
 
 Examples:
   esb add recipe crud product name:string price:int64 sku:string
-  esb add recipe ledger account`,
+  esb add recipe ledger account
+  esb add recipe statemachine order --states placed,paid,shipped,delivered,cancelled \
+    --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"`,
 	Args: cobra.MinimumNArgs(1),
+}
+
+var (
+	smStates      string
+	smTransitions string
+)
+
+var addRecipeStateMachineCmd = &cobra.Command{
+	Use:   "statemachine <name> --states <s1,s2,...> --transitions <a->b,b->c,...>",
+	Short: "State-machine aggregate with guarded lifecycle transitions",
+	Long: `Generates a state-machine aggregate whose state is derived purely from
+events, with a transition table that rejects illegal moves:
+
+  - one event per state (<Name><State>) + a transition table
+  - service with a guarded Transition(ctx, id, to) command
+  - read model + projection worker (current state), queries, HTTP handler
+  - Given-When-Then scenario tests (valid + illegal transitions)
+
+Name and states must be snake_case. The first --states entry is the initial
+state (the only one a new aggregate may enter).
+
+Example:
+  esb add recipe statemachine order \
+    --states placed,paid,shipped,delivered,cancelled \
+    --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if smStates == "" {
+			return fmt.Errorf("--states is required")
+		}
+		name := args[0]
+		fmt.Printf("Scaffolding state-machine recipe: %s\n\n", name)
+		return generator.AddStateMachine(name, smStates, smTransitions)
+	},
 }
 
 var addRecipeLedgerCmd = &cobra.Command{
@@ -82,6 +119,10 @@ Examples:
 }
 
 func init() {
+	addRecipeStateMachineCmd.Flags().StringVar(&smStates, "states", "", "comma-separated snake_case states; first is the initial state (required)")
+	addRecipeStateMachineCmd.Flags().StringVar(&smTransitions, "transitions", "", "comma-separated from->to pairs")
+
 	addRecipeCmd.AddCommand(addRecipeCRUDCmd)
 	addRecipeCmd.AddCommand(addRecipeLedgerCmd)
+	addRecipeCmd.AddCommand(addRecipeStateMachineCmd)
 }

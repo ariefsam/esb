@@ -106,6 +106,11 @@ func TestBuildArgv_AcceptedCommands(t *testing.T) {
 			want:    []string{"esb", "add", "recipe", "ledger", "account"},
 		},
 		{
+			command: "add-recipe-statemachine",
+			form:    FormInput{"name": {"order"}, "states": {"placed", "paid"}, "transitions": {"placed->paid"}},
+			want:    []string{"esb", "add", "recipe", "statemachine", "order", "--states", "placed,paid", "--transitions", "placed->paid"},
+		},
+		{
 			command: "show",
 			form:    FormInput{},
 			want:    []string{"esb", "show"},
@@ -147,6 +152,9 @@ func TestBuildArgv_RejectsInvalidNames(t *testing.T) {
 		{"add-recipe-crud", FormInput{"name": {"product"}, "fields": {"price;evil"}}},        // bad field
 		{"add-recipe-ledger", FormInput{"name": {"Account"}}},                                // not snake_case
 		{"add-recipe-ledger", FormInput{"name": {"account;rm -rf /"}}},                       // shell metachar
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {}}},              // no states
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"Placed"}}},      // state not snake
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"placed"}, "transitions": {"placed;paid"}}}, // bad transition
 		{"show", FormInput{"aggregate": {"bad name"}}},
 	}
 	for _, tc := range cases {

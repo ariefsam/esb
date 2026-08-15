@@ -1,0 +1,57 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+	"{{.ModuleName}}/testkit"
+)
+
+func Test{{.NamePascal}}Service_InitialTransition(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
+		When(func(ctx context.Context) error { return svc.Transition(ctx, "{{.Name}}-1", "{{.InitialState}}") }).
+		Then(testkit.Event("{{.InitialEvent}}", struct{}{}))
+}
+
+func Test{{.NamePascal}}Service_UnknownStateRejected(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
+		When(func(ctx context.Context) error { return svc.Transition(ctx, "{{.Name}}-1", "__no_such_state__") }).
+		ThenError(Err{{.NamePascal}}UnknownState)
+}
+{{if .HasSecond}}
+// A brand-new aggregate may only enter its initial state.
+func Test{{.NamePascal}}Service_NonInitialFromNothingRejected(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
+		When(func(ctx context.Context) error { return svc.Transition(ctx, "{{.Name}}-1", "{{.SecondState}}") }).
+		ThenError(Err{{.NamePascal}}InvalidTransition)
+}
+{{end}}{{if .HasValidTo}}
+func Test{{.NamePascal}}Service_ValidTransition(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.InitialEvent}}", struct{}{}),
+	).
+		When(func(ctx context.Context) error { return svc.Transition(ctx, "{{.Name}}-1", "{{.ValidTo}}") }).
+		Then(testkit.Event("{{.ValidEvent}}", struct{}{}))
+}
+{{end}}{{if .HasInvalidTo}}
+// A transition not allowed from the current state is rejected.
+func Test{{.NamePascal}}Service_InvalidTransitionRejected(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.InitialEvent}}", struct{}{}),
+	).
+		When(func(ctx context.Context) error { return svc.Transition(ctx, "{{.Name}}-1", "{{.InvalidTo}}") }).
+		ThenError(Err{{.NamePascal}}InvalidTransition)
+}
+{{end}}

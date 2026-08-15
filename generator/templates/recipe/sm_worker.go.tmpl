@@ -1,0 +1,86 @@
+package projection
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+)
+
+// {{.NamePascal}}ProjectionWorker keeps the {{.NamePascal}} read model in sync
+// with the current state.
+type {{.NamePascal}}ProjectionWorker struct {
+	esClient *eventstore.Client
+	db       *gorm.DB
+}
+
+func New{{.NamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
+	return &{{.NamePascal}}ProjectionWorker{esClient: esClient, db: db}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		cursor := w.readCursor(ctx)
+		events, err := w.esClient.EventsAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.Name}} projection: fetch error: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		for _, e := range events {
+			if err := w.applyEvent(ctx, e); err != nil {
+				log.Printf("{{.Name}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
+			}
+		}
+	}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+	var row ProjectionCursorRow
+	w.db.WithContext(ctx).Where("name = ?", "{{.Name}}").First(&row)
+	return row.AfterID
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
+	// Every {{.Name}} event names the state being entered; look it up and
+	// upsert the row. An unrelated event (empty state) is skipped.
+	state := domain.{{.NamePascal}}StateFor(e.EventName)
+	if state == "" {
+		return nil
+	}
+	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		row := {{.NamePascal}}Row{
+			AggregateID: e.AggregateID,
+			State:       state,
+			Version:     e.Version,
+			CreatedAt:   e.TimeMillis,
+			UpdatedAt:   e.TimeMillis,
+		}
+		// Insert on first event; on later events keep CreatedAt and only move
+		// state/version/updated_at forward.
+		aggCol := clause.Column{Name: "aggregate_id"}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{aggCol},
+			DoUpdates: clause.AssignmentColumns([]string{"state", "version", "updated_at"}),
+		}).Create(&row).Error; err != nil {
+			return err
+		}
+
+		cursorCol := clause.Column{Name: "name"}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{cursorCol},
+			DoUpdates: clause.AssignmentColumns([]string{"after_id", "updated_at"}),
+		}).Create(&ProjectionCursorRow{Name: "{{.Name}}", AfterID: int64(e.ID), UpdatedAt: e.TimeMillis}).Error
+	})
+}

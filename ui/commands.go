@@ -129,6 +129,18 @@ var catalog = []CatalogEntry{
 		Build:   buildAddRecipeLedger,
 	},
 	{
+		ID:          "add-recipe-statemachine",
+		Label:       "Add state machine recipe",
+		Description: "Scaffold a lifecycle aggregate with guarded transitions. snake_case name + states; transitions as from->to (one per line).",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "order", Required: true, Type: "text", Help: "snake_case aggregate name"},
+			{Name: "states", Label: "States", Placeholder: "placed\npaid\nshipped\ndelivered\ncancelled", Required: true, Type: "list", Help: "one snake_case state per line; the first is the initial state"},
+			{Name: "transitions", Label: "Transitions", Placeholder: "placed->paid\npaid->shipped", Type: "list", Help: "one from->to per line"},
+		},
+		Preview: []string{"esb", "add", "recipe", "statemachine", "order", "--states", "placed,paid,shipped", "--transitions", "placed->paid,paid->shipped"},
+		Build:   buildAddRecipeStateMachine,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -342,6 +354,47 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("name must be snake_case")
 	}
 	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddRecipeStateMachine(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	states := form["states"]
+	if len(states) == 0 {
+		return nil, fmt.Errorf("states: at least one state required")
+	}
+	for _, s := range states {
+		if err := validateFieldName(s); err != nil {
+			return nil, fmt.Errorf("state %q: %w", s, err)
+		}
+		if s != naming.ToSnakeCase(s) {
+			return nil, fmt.Errorf("state %q must be snake_case", s)
+		}
+	}
+	// Transitions are "from->to"; validate each side as a plain name so the
+	// only special character that reaches argv is the "->" separator.
+	transitions := form["transitions"]
+	for _, tr := range transitions {
+		parts := strings.SplitN(tr, "->", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("transition %q: expected from->to", tr)
+		}
+		for _, side := range parts {
+			if err := validateFieldName(strings.TrimSpace(side)); err != nil {
+				return nil, fmt.Errorf("transition %q: %w", tr, err)
+			}
+		}
+	}
+	argv := []string{"esb", "add", "recipe", "statemachine", name, "--states", strings.Join(states, ",")}
+	if len(transitions) > 0 {
+		argv = append(argv, "--transitions", strings.Join(transitions, ","))
+	}
+	return argv, nil
 }
 
 func buildShow(form FormInput) ([]string, error) {

@@ -91,6 +91,43 @@ type LedgerData struct {
 	EntryTableName string // statement table: "account_entries"
 }
 
+// SMState is one state of a state-machine aggregate.
+type SMState struct {
+	Raw    string // "placed"
+	Pascal string // "Placed"
+	Event  string // "<NamePascal>Placed" — the event emitted when entering it
+}
+
+// SMFromTransitions lists the states reachable from one state.
+type SMFromTransitions struct {
+	From string
+	Tos  []string
+}
+
+// StateMachineData is passed to the state-machine recipe templates.
+type StateMachineData struct {
+	ModuleName       string
+	PackageName      string
+	Name             string // snake_case: "order"
+	NamePascal       string // PascalCase: "Order"
+	NameKebab        string // kebab-case aggregate-store name: "order"
+	Receiver         string // Go receiver variable: "o"
+	TableName        string // snake_case plural: "orders"
+	States           []SMState
+	InitialState     string // raw name of the entry state
+	TransitionGroups []SMFromTransitions
+
+	// Precomputed values for the generated scenario tests.
+	InitialEvent string // event of the initial state
+	HasSecond    bool
+	SecondState  string // a non-initial state (for "invalid from nothing")
+	HasValidTo   bool
+	ValidTo      string // a state reachable from the initial state
+	ValidEvent   string // its event
+	HasInvalidTo bool
+	InvalidTo    string // a state NOT reachable from the initial state
+}
+
 // QueryData is passed to add-query templates.
 type QueryData struct {
 	ModuleName          string
