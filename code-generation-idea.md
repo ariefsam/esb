@@ -245,7 +245,12 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
 
 **Fase 3 — lintas-aggregate & evolusi.**
 6. **Idempotent** flag + **upcaster** (nilai tinggi, effort rendah).
-7. **Saga** money-transfer (dua langkah + kompensasi).
+7. ✅ **Saga** money-transfer (`esb add recipe saga <name>`): orchestration saga
+   dua-langkah (Debit→Credit) dengan **kompensasi** (refund source saat credit
+   gagal). Kegagalan leg = outcome domain (event Failed/Compensated), bukan
+   error Go. Port interface + stub log (di-wire agar compile), read model +
+   query by-state, handler, scenario test (happy / debit-gagal / credit-gagal-
+   kompensasi). Diverifikasi runtime.
 8. **Outbox** publisher.
 
 **Fase 4 — ergonomi.**

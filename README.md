@@ -345,6 +345,24 @@ ilegal & state tak dikenal**, read model current-state + query by-state,
 handler, dan scenario test (transisi valid & ilegal). `--states` pertama adalah
 state awal (satu-satunya yang boleh dimasuki aggregate baru).
 
+#### `esb add recipe saga <name>`
+
+Orchestration saga (process manager): transfer dua-langkah dengan **kompensasi**.
+
+```bash
+esb add recipe saga money_transfer
+```
+
+Menghasilkan: aggregate saga (Requested→Debited→Credited→Completed, atau
+→Failed / →Compensated), command `Transfer(ctx, id, from, to, amount)` yang
+menggerakkan Debit lalu Credit lewat sebuah **`<Name>Port` interface**, dan
+**me-refund source** kalau credit gagal (tak ada uang hilang). Kegagalan leg
+adalah *outcome domain* (event Failed/Compensated), bukan error Go. Sebuah stub
+port yang hanya nge-log ikut di-generate & di-wire agar proyek langsung
+compile — ganti dengan adapter asli (mis. yang memanggil `AccountService`).
+Termasuk read model + query by-state, handler, dan scenario test (happy /
+debit-gagal / credit-gagal-kompensasi).
+
 ---
 
 ### `esb show [aggregate-name]`

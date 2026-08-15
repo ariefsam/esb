@@ -1,0 +1,22 @@
+package service
+
+import (
+	"context"
+	"log"
+)
+
+// {{.NamePascal}}LogPort is a placeholder {{.NamePascal}}Port that only logs and
+// succeeds. It exists so a freshly generated project compiles and runs; replace
+// it in wire/wire.go with a real adapter that debits/credits actual accounts
+// (e.g. one backed by your AccountService).
+type {{.NamePascal}}LogPort struct{}
+
+func ({{.NamePascal}}LogPort) Debit(ctx context.Context, account string, amount int64, ref string) error {
+	log.Printf("{{.Name}}: TODO debit %d from %q (ref %q)", amount, account, ref)
+	return nil
+}
+
+func ({{.NamePascal}}LogPort) Credit(ctx context.Context, account string, amount int64, ref string) error {
+	log.Printf("{{.Name}}: TODO credit %d to %q (ref %q)", amount, account, ref)
+	return nil
+}

@@ -1,0 +1,105 @@
+package domain
+
+import "encoding/json"
+
+const {{.NamePascal}}AggregateName = "{{.NameKebab}}"
+
+// {{.NamePascal}} state constants.
+const (
+	{{.NamePascal}}StateRequested   = "requested"
+	{{.NamePascal}}StateDebited     = "debited"
+	{{.NamePascal}}StateCompleted   = "completed"
+	{{.NamePascal}}StateFailed      = "failed"
+	{{.NamePascal}}StateCompensated = "compensated"
+)
+
+// {{.NamePascal}} is the saga (process-manager) aggregate coordinating a
+// two-step transfer with compensation. Its state is derived purely from events.
+type {{.NamePascal}} struct {
+	AggregateID string
+	Version     int64
+	State       string
+	From        string
+	To          string
+	Amount      int64
+}
+
+// New{{.NamePascal}} returns an empty aggregate ready for Replay.
+func New{{.NamePascal}}() *{{.NamePascal}} { return &{{.NamePascal}}{} }
+
+// Apply mutates aggregate state for a single event.
+func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessage) error {
+	switch eventName {
+	case "{{.NamePascal}}Requested":
+		var e {{.NamePascal}}Requested
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+		{{.Receiver}}.From = e.From
+		{{.Receiver}}.To = e.To
+		{{.Receiver}}.Amount = e.Amount
+		{{.Receiver}}.State = {{.NamePascal}}StateRequested
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Debited":
+		{{.Receiver}}.State = {{.NamePascal}}StateDebited
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Credited":
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Completed":
+		{{.Receiver}}.State = {{.NamePascal}}StateCompleted
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Failed":
+		{{.Receiver}}.State = {{.NamePascal}}StateFailed
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Compensated":
+		{{.Receiver}}.State = {{.NamePascal}}StateCompensated
+		{{.Receiver}}.Version++
+		return nil
+	default:
+		return nil
+	}
+}
+
+// Replay rebuilds aggregate state by replaying events from the store.
+func ({{.Receiver}} *{{.NamePascal}}) Replay(events []Event) error {
+	for _, e := range events {
+		if err := {{.Receiver}}.Apply(e.EventName, e.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Exists reports whether the transfer has been requested.
+func ({{.Receiver}} *{{.NamePascal}}) Exists() bool { return {{.Receiver}}.Version > 0 }
+
+// {{.NamePascal}}Requested event.
+type {{.NamePascal}}Requested struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Amount int64  `json:"amount"`
+}
+
+// {{.NamePascal}}Debited event.
+type {{.NamePascal}}Debited struct{}
+
+// {{.NamePascal}}Credited event.
+type {{.NamePascal}}Credited struct{}
+
+// {{.NamePascal}}Completed event.
+type {{.NamePascal}}Completed struct{}
+
+// {{.NamePascal}}Failed event.
+type {{.NamePascal}}Failed struct {
+	Reason string `json:"reason"`
+}
+
+// {{.NamePascal}}Compensated event.
+type {{.NamePascal}}Compensated struct {
+	Reason string `json:"reason"`
+}

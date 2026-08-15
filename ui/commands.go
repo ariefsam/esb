@@ -141,6 +141,16 @@ var catalog = []CatalogEntry{
 		Build:   buildAddRecipeStateMachine,
 	},
 	{
+		ID:          "add-recipe-saga",
+		Label:       "Add saga recipe",
+		Description: "Scaffold an orchestration saga: a two-step transfer with compensation (Debit then Credit, refund on failure). snake_case name.",
+		Fields: []CommandField{
+			{Name: "name", Label: "Name", Placeholder: "money_transfer", Required: true, Type: "text", Help: "snake_case saga name"},
+		},
+		Preview: []string{"esb", "add", "recipe", "saga", "money_transfer"},
+		Build:   buildAddRecipeSaga,
+	},
+	{
 		ID:          "show",
 		Label:       "Show project",
 		Description: "Print esb show output for the current project (optional aggregate focus).",
@@ -354,6 +364,17 @@ func buildAddRecipeLedger(form FormInput) ([]string, error) {
 		return nil, fmt.Errorf("name must be snake_case")
 	}
 	return []string{"esb", "add", "recipe", "ledger", name}, nil
+}
+
+func buildAddRecipeSaga(form FormInput) ([]string, error) {
+	name := onlyValue(form, "name")
+	if err := validateFieldName(name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
+	}
+	if name != naming.ToSnakeCase(name) {
+		return nil, fmt.Errorf("name must be snake_case")
+	}
+	return []string{"esb", "add", "recipe", "saga", name}, nil
 }
 
 func buildAddRecipeStateMachine(form FormInput) ([]string, error) {

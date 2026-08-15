@@ -1,0 +1,109 @@
+package projection
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+)
+
+// {{.NamePascal}}ProjectionWorker keeps the {{.NamePascal}} saga read model in
+// sync with the current state.
+type {{.NamePascal}}ProjectionWorker struct {
+	esClient *eventstore.Client
+	db       *gorm.DB
+}
+
+func New{{.NamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
+	return &{{.NamePascal}}ProjectionWorker{esClient: esClient, db: db}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		cursor := w.readCursor(ctx)
+		events, err := w.esClient.EventsAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.Name}} projection: fetch error: %v — retrying in 3s", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		for _, e := range events {
+			if err := w.applyEvent(ctx, e); err != nil {
+				log.Printf("{{.Name}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
+			}
+		}
+	}
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+	var row ProjectionCursorRow
+	w.db.WithContext(ctx).Where("name = ?", "{{.Name}}").First(&row)
+	return row.AfterID
+}
+
+func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
+	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		switch e.EventName {
+		case "{{.NamePascal}}Requested":
+			var evt domain.{{.NamePascal}}Requested
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			row := {{.NamePascal}}Row{
+				AggregateID: e.AggregateID,
+				State:       domain.{{.NamePascal}}StateRequested,
+				From:        evt.From,
+				To:          evt.To,
+				Amount:      evt.Amount,
+				Version:     e.Version,
+				UpdatedAt:   e.TimeMillis,
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+
+		default:
+			if state := {{.Name}}StateForEvent(e.EventName); state != "" {
+				if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).
+					Updates(map[string]any{"state": state, "version": e.Version, "updated_at": e.TimeMillis}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		cursorCol := clause.Column{Name: "name"}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{cursorCol},
+			DoUpdates: clause.AssignmentColumns([]string{"after_id", "updated_at"}),
+		}).Create(&ProjectionCursorRow{Name: "{{.Name}}", AfterID: int64(e.ID), UpdatedAt: e.TimeMillis}).Error
+	})
+}
+
+// {{.Name}}StateForEvent maps a later saga event to the read-model state it
+// moves the row to. Credited keeps the "debited" state (Completed finalizes it).
+func {{.Name}}StateForEvent(eventName string) string {
+	switch eventName {
+	case "{{.NamePascal}}Debited":
+		return domain.{{.NamePascal}}StateDebited
+	case "{{.NamePascal}}Completed":
+		return domain.{{.NamePascal}}StateCompleted
+	case "{{.NamePascal}}Failed":
+		return domain.{{.NamePascal}}StateFailed
+	case "{{.NamePascal}}Compensated":
+		return domain.{{.NamePascal}}StateCompensated
+	default:
+		return ""
+	}
+}

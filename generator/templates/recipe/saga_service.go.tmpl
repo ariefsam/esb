@@ -1,0 +1,133 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"{{.ModuleName}}/domain"
+)
+
+const {{.NamePascal}}SnapshotInterval = 100
+
+var (
+	Err{{.NamePascal}}Exists        = errors.New("{{.NameKebab}} already exists")
+	Err{{.NamePascal}}InvalidAmount = errors.New("amount must be positive")
+)
+
+// {{.NamePascal}}Port is the boundary the saga drives: the two sides of the
+// transfer. Wire it to your real account/service commands (e.g. an
+// AccountService). A failing Debit/Credit is a domain outcome, not an
+// infrastructure error, and the saga records it + compensates.
+type {{.NamePascal}}Port interface {
+	Debit(ctx context.Context, account string, amount int64, ref string) error
+	Credit(ctx context.Context, account string, amount int64, ref string) error
+}
+
+// {{.NamePascal}}Service is an orchestration saga: it records its own event
+// stream while driving the two-step transfer through the port, compensating
+// (refunding the source) when the credit leg fails.
+type {{.NamePascal}}Service struct {
+	eventRepo domain.EventRepository
+	port      {{.NamePascal}}Port
+}
+
+func New{{.NamePascal}}Service(repo domain.EventRepository, port {{.NamePascal}}Port) *{{.NamePascal}}Service {
+	return &{{.NamePascal}}Service{eventRepo: repo, port: port}
+}
+
+// Transfer runs the saga: Requested -> Debit -> Debited -> Credit -> Credited
+// -> Completed. If the debit fails the transfer ends Failed; if the credit
+// fails the source is refunded and the transfer ends Compensated. A failed leg
+// is a recorded outcome, so Transfer returns a non-nil error only for
+// preconditions (already exists / invalid amount) or a store failure — query
+// the transfer state to learn whether it Completed.
+func (s *{{.NamePascal}}Service) Transfer(ctx context.Context, id, from, to string, amount int64) error {
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if agg.Version > 0 {
+		return Err{{.NamePascal}}Exists
+	}
+	if amount <= 0 {
+		return Err{{.NamePascal}}InvalidAmount
+	}
+
+	if err := s.store(ctx, agg, "{{.NamePascal}}Requested", domain.{{.NamePascal}}Requested{From: from, To: to, Amount: amount}); err != nil {
+		return err
+	}
+
+	if err := s.port.Debit(ctx, from, amount, id); err != nil {
+		return s.store(ctx, agg, "{{.NamePascal}}Failed", domain.{{.NamePascal}}Failed{Reason: err.Error()})
+	}
+	if err := s.store(ctx, agg, "{{.NamePascal}}Debited", domain.{{.NamePascal}}Debited{}); err != nil {
+		return err
+	}
+
+	if err := s.port.Credit(ctx, to, amount, id); err != nil {
+		// Compensate: refund the source so no money is lost.
+		_ = s.port.Credit(ctx, from, amount, id+"-refund")
+		return s.store(ctx, agg, "{{.NamePascal}}Compensated", domain.{{.NamePascal}}Compensated{Reason: err.Error()})
+	}
+	if err := s.store(ctx, agg, "{{.NamePascal}}Credited", domain.{{.NamePascal}}Credited{}); err != nil {
+		return err
+	}
+	return s.store(ctx, agg, "{{.NamePascal}}Completed", domain.{{.NamePascal}}Completed{})
+}
+
+// esb:inject:service-commands
+
+func (s *{{.NamePascal}}Service) load(ctx context.Context, id string) (*domain.{{.NamePascal}}, error) {
+	agg := domain.New{{.NamePascal}}()
+	agg.AggregateID = id
+
+	var afterVersion int64
+	snap, err := s.eventRepo.LatestSnapshot(ctx, id, domain.{{.NamePascal}}AggregateName)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(snap.State, agg); err != nil {
+			return nil, fmt.Errorf("restore snapshot: %w", err)
+		}
+		afterVersion = snap.Version
+	case errors.Is(err, domain.ErrSnapshotNotFound):
+	default:
+		return nil, fmt.Errorf("load snapshot: %w", err)
+	}
+
+	events, err := s.eventRepo.Retrieve(ctx, id, domain.{{.NamePascal}}AggregateName, afterVersion)
+	if err != nil {
+		return nil, err
+	}
+	return agg, agg.Replay(events)
+}
+
+func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	expectedVersion := agg.Version
+	e := domain.Event{
+		AggregateName: domain.{{.NamePascal}}AggregateName,
+		AggregateID:   agg.AggregateID,
+		EventName:     eventName,
+		Version:       expectedVersion + 1,
+		Data:          b,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
+		return err
+	}
+	if err := agg.Apply(eventName, b); err != nil {
+		return err
+	}
+	if agg.Version > 0 && agg.Version%{{.NamePascal}}SnapshotInterval == 0 {
+		if state, err := json.Marshal(agg); err == nil {
+			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.NamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
+		}
+	}
+	return nil
+}

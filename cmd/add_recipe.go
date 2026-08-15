@@ -19,13 +19,43 @@ Available recipes:
   crud         <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
   ledger       <name>                     append-only account: Open/Deposit/Withdraw/Freeze/Close
   statemachine <name> --states --transitions   guarded lifecycle transitions
+  saga         <name>                     orchestration saga: two-step transfer + compensation
 
 Examples:
   esb add recipe crud product name:string price:int64 sku:string
   esb add recipe ledger account
+  esb add recipe saga money_transfer
   esb add recipe statemachine order --states placed,paid,shipped,delivered,cancelled \
     --transitions "placed->paid,paid->shipped,shipped->delivered,placed->cancelled,paid->cancelled"`,
 	Args: cobra.MinimumNArgs(1),
+}
+
+var addRecipeSagaCmd = &cobra.Command{
+	Use:   "saga <name>",
+	Short: "Orchestration saga: a two-step transfer with compensation",
+	Long: `Generates an orchestration saga (process manager) that coordinates a
+two-step transfer through a Port interface, compensating on failure:
+
+  - domain aggregate + Requested/Debited/Credited/Completed/Failed/Compensated
+  - service with a Transfer(ctx, id, from, to, amount) command; a failed leg is
+    a recorded outcome (Failed / Compensated with a source refund), not a Go
+    error, so no money is lost
+  - a <Name>Port interface (Debit/Credit) plus a log-only stub, wired so the
+    project compiles — replace the stub with a real adapter
+  - read model + projection worker, Get<Name> / List<Name>sByState queries,
+    an HTTP handler, and Given-When-Then scenario tests (happy / debit-fails /
+    credit-fails-compensates)
+
+Name must be snake_case.
+
+Examples:
+  esb add recipe saga money_transfer`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		fmt.Printf("Scaffolding saga recipe: %s\n\n", name)
+		return generator.AddSaga(name)
+	},
 }
 
 var (
@@ -125,4 +155,5 @@ func init() {
 	addRecipeCmd.AddCommand(addRecipeCRUDCmd)
 	addRecipeCmd.AddCommand(addRecipeLedgerCmd)
 	addRecipeCmd.AddCommand(addRecipeStateMachineCmd)
+	addRecipeCmd.AddCommand(addRecipeSagaCmd)
 }

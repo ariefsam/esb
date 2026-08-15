@@ -97,9 +97,16 @@ func AddLedger(name string) error {
 }
 
 // wireAggregateSlice injects the projection worker + write-side handler +
-// service instance for a recipe aggregate into wire/main. Shared by the ledger
-// and (future) recipes that expose one aggregate with commands.
+// service instance for a recipe aggregate into wire/main, constructing the
+// service with the default `service.New<Pascal>Service(eventRepo)`.
 func wireAggregateSlice(tx *injector.Tx, moduleName, pascal string, actions *[]string) error {
+	return wireAggregateSliceWithService(tx, moduleName, pascal, "service.New"+pascal+"Service(eventRepo)", actions)
+}
+
+// wireAggregateSliceWithService is wireAggregateSlice with an explicit service
+// constructor RHS — used by recipes whose service takes extra dependencies
+// (e.g. the saga service, which needs a port).
+func wireAggregateSliceWithService(tx *injector.Tx, moduleName, pascal, serviceCtor string, actions *[]string) error {
 	lower := lcFirst(pascal)
 	workerType := pascal + "ProjectionWorker"
 	handlerType := pascal + "Handler"
@@ -115,7 +122,7 @@ func wireAggregateSlice(tx *injector.Tx, moduleName, pascal string, actions *[]s
 	if ok, err := tx.Contains("wire/wire.go", svcVar+" :="); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", "\t"+svcVar+" := service.New"+pascal+"Service(eventRepo)"); err != nil {
+		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", "\t"+svcVar+" := "+serviceCtor); err != nil {
 			return err
 		}
 	}

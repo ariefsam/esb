@@ -1,0 +1,24 @@
+package projection
+
+import (
+	"context"
+
+	"gorm.io/gorm"
+)
+
+// Get{{.NamePascal}} returns a single {{.NamePascal}} saga row by aggregate ID.
+func Get{{.NamePascal}}(ctx context.Context, db *gorm.DB, id string) (*{{.NamePascal}}Row, error) {
+	var row {{.NamePascal}}Row
+	if err := db.WithContext(ctx).Where("aggregate_id = ?", id).First(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// List{{.NamePascal}}sByState returns all {{.NamePascal}} sagas in a given state
+// (e.g. "compensated" to find transfers that failed and were refunded).
+func List{{.NamePascal}}sByState(ctx context.Context, db *gorm.DB, state string) ([]{{.NamePascal}}Row, error) {
+	var rows []{{.NamePascal}}Row
+	err := db.WithContext(ctx).Where("state = ?", state).Find(&rows).Error
+	return rows, err
+}
