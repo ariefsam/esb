@@ -15,4 +15,5 @@ func init() {
 	addCmd.AddCommand(addProjectionCmd)
 	addCmd.AddCommand(addHandlerCmd)
 	addCmd.AddCommand(addQueryCmd)
+	addCmd.AddCommand(addRecipeCmd)
 }

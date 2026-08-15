@@ -1,0 +1,82 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"{{.ModuleName}}/domain"
+	"{{.ModuleName}}/eventstore"
+	"{{.ModuleName}}/testkit"
+)
+
+// These Given-When-Then scenarios exercise the real command methods against an
+// in-memory event store (eventstore.FakeStore) — the same load/store and
+// optimistic-concurrency code the production service runs.
+
+func Test{{.NamePascal}}Service_Create(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
+		When(func(ctx context.Context) error { return svc.Create(ctx, "{{.Name}}-1", in) }).
+		Then(testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}))
+}
+
+func Test{{.NamePascal}}Service_CreateTwiceFails(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+	).
+		When(func(ctx context.Context) error { return svc.Create(ctx, "{{.Name}}-1", in) }).
+		ThenError(Err{{.NamePascal}}Exists)
+}
+
+func Test{{.NamePascal}}Service_Update(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+	).
+		When(func(ctx context.Context) error { return svc.Update(ctx, "{{.Name}}-1", in) }).
+		Then(testkit.Event("{{.NamePascal}}Updated", domain.{{.NamePascal}}Updated{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}))
+}
+
+func Test{{.NamePascal}}Service_UpdateMissingFails(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-missing").
+		When(func(ctx context.Context) error { return svc.Update(ctx, "{{.Name}}-missing", in) }).
+		ThenError(Err{{.NamePascal}}NotFound)
+}
+
+func Test{{.NamePascal}}Service_Archive(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+	).
+		When(func(ctx context.Context) error { return svc.Archive(ctx, "{{.Name}}-1") }).
+		Then(testkit.Event("{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{}))
+}

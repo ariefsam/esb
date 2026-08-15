@@ -1,0 +1,82 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"{{.ModuleName}}/service"
+)
+
+// {{.NamePascal}}Handler exposes the write-side commands for the {{.NamePascal}}
+// aggregate over HTTP. The read side lives in projection queries
+// (List{{.NamePascal}}s / Get{{.NamePascal}}).
+type {{.NamePascal}}Handler struct {
+	svc *service.{{.NamePascal}}Service
+}
+
+func New{{.NamePascal}}Handler(svc *service.{{.NamePascal}}Service) *{{.NamePascal}}Handler {
+	return &{{.NamePascal}}Handler{svc: svc}
+}
+
+// Create handles POST: body {"id": "...", <fields>}.
+func (h *{{.NamePascal}}Handler) Create(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+		service.{{.NamePascal}}Input
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Create(r.Context(), req.ID, req.{{.NamePascal}}Input); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "status": "created"})
+}
+
+// Update handles POST: body {"id": "...", <fields>}.
+func (h *{{.NamePascal}}Handler) Update(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+		service.{{.NamePascal}}Input
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Update(r.Context(), req.ID, req.{{.NamePascal}}Input); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "updated"})
+}
+
+// Archive handles POST: body {"id": "..."}.
+func (h *{{.NamePascal}}Handler) Archive(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.svc.Archive(r.Context(), req.ID); err != nil {
+		write{{.NamePascal}}Error(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": req.ID, "status": "archived"})
+}
+
+// write{{.NamePascal}}Error maps domain command errors to HTTP status codes.
+func write{{.NamePascal}}Error(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.Err{{.NamePascal}}Exists):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, service.Err{{.NamePascal}}NotFound):
+		writeError(w, http.StatusNotFound, err)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}

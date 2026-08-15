@@ -54,6 +54,29 @@ type HandlerData struct {
 	AggregateNamePascal string // PascalCase
 }
 
+// CRUDField extends a plain field with a Go literal sample value used by the
+// generated Given-When-Then scenario tests.
+type CRUDField struct {
+	NamePascal string // Go struct field name: "Price"
+	JSONTag    string // json tag / gorm column: "price"
+	Type       string // Go type: "string", "int64", ...
+	Sample     string // Go literal for tests: `"sample"`, `1`, `true`
+}
+
+// CRUDData is passed to the CRUD recipe templates. It describes one entity
+// aggregate (product, customer, …) plus the fields carried by its
+// Created/Updated events and mirrored in the read-model row.
+type CRUDData struct {
+	ModuleName  string
+	PackageName string
+	Name        string // snake_case: "product"
+	NamePascal  string // PascalCase: "Product"
+	NameKebab   string // kebab-case aggregate-store name: "product"
+	Receiver    string // Go receiver variable: "p"
+	TableName   string // snake_case plural: "products"
+	Fields      []CRUDField
+}
+
 // QueryData is passed to add-query templates.
 type QueryData struct {
 	ModuleName          string

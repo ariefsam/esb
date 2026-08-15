@@ -14,7 +14,6 @@ package inspector
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -148,7 +147,7 @@ func Scan(rootDir string) (ProjectModel, error) {
 	if err := scanProjections(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
 		return m, err
 	}
-	if err := scanQueries(filepath.Join(rootDir, "projection", "query.go"), aggregateNames, &m); err != nil {
+	if err := scanQueries(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
 		return m, err
 	}
 	if err := scanWire(filepath.Join(rootDir, "wire", "wire.go"), &m); err != nil {
@@ -482,11 +481,14 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 		if err != nil {
 			return err
 		}
+		// Only files that actually declare a `<Something>Handler` struct are
+		// handlers; shared helpers (e.g. response.go) are skipped.
+		if file == nil || !declaresHandlerStruct(file) {
+			continue
+		}
 		agg := ""
-		if file != nil {
-			if pascal, found := handlerServiceAggregate(file); found {
-				agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
-			}
+		if pascal, found := handlerServiceAggregate(file); found {
+			agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
 		}
 		m.Handler = append(m.Handler, Handler{Name: handlerName, Aggregate: agg})
 	}
@@ -495,6 +497,27 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 		return m.Handler[i].Name < m.Handler[j].Name
 	})
 	return nil
+}
+
+// declaresHandlerStruct reports whether the file declares a struct type whose
+// name ends in "Handler".
+func declaresHandlerStruct(file *ast.File) bool {
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			if _, ok := ts.Type.(*ast.StructType); ok && strings.HasSuffix(ts.Name.Name, "Handler") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handlerServiceAggregate finds a struct field `svc *service.<X>Service` and
@@ -679,34 +702,50 @@ func switchAggregateNames(file *ast.File) ([]string, bool) {
 	return out, found
 }
 
-// scanQueries lists exported query functions in projection/query.go and
-// derives the aggregate each serves from the `[]XxxRow`/`*XxxRow` return type.
-func scanQueries(path string, aggregateNames map[string]string, m *ProjectModel) error {
-	file, _, err := parseGoFile(path)
+// scanQueries lists exported query functions across every .go file in the
+// projection directory (queries may be split across files, e.g. one per
+// aggregate or recipe) and derives the aggregate each serves from the
+// `[]XxxRow`/`*XxxRow` return type.
+func scanQueries(dir string, aggregateNames map[string]string, m *ProjectModel) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	if file == nil {
-		return nil
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		file, _, err := parseGoFile(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if file == nil {
+			continue
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || !ast.IsExported(fd.Name.Name) {
+				continue
+			}
+			if !isQuerySignature(fd) {
+				continue
+			}
+			agg := ""
+			if pascal, found := queryRowAggregate(fd); found {
+				agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
+			}
+			m.Query = append(m.Query, Query{Name: fd.Name.Name, Aggregate: agg})
+		}
 	}
 
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || !ast.IsExported(fd.Name.Name) {
-			continue
-		}
-		if !isQuerySignature(fd) {
-			continue
-		}
-		agg := ""
-		if pascal, found := queryRowAggregate(fd); found {
-			agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
-		}
-		m.Query = append(m.Query, Query{Name: fd.Name.Name, Aggregate: agg})
-	}
+	sort.Slice(m.Query, func(i, j int) bool {
+		return m.Query[i].Name < m.Query[j].Name
+	})
 	return nil
 }
 

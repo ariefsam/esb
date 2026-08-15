@@ -1,0 +1,78 @@
+package domain
+
+import "encoding/json"
+
+const {{.NamePascal}}AggregateName = "{{.NameKebab}}"
+
+// {{.NamePascal}}AggregateID returns the aggregate ID for a {{.NamePascal}}.
+func {{.NamePascal}}AggregateID(id string) string { return id }
+
+// {{.NamePascal}} is the aggregate root for the {{.NamePascal}} entity. It is
+// JSON-marshaled as-is to build snapshots, so exported fields become part of
+// the snapshot shape.
+type {{.NamePascal}} struct {
+	AggregateID string
+	Version     int64
+{{range .Fields}}	{{.NamePascal}} {{.Type}}
+{{end}}	Archived bool
+}
+
+// New{{.NamePascal}} returns an empty aggregate ready for Replay.
+func New{{.NamePascal}}() *{{.NamePascal}} { return &{{.NamePascal}}{} }
+
+// Apply mutates aggregate state for a single event.
+func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessage) error {
+	switch eventName {
+	case "{{.NamePascal}}Created":
+		var e {{.NamePascal}}Created
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+{{range .Fields}}		{{$.Receiver}}.{{.NamePascal}} = e.{{.NamePascal}}
+{{end}}		{{.Receiver}}.Archived = false
+		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Updated":
+		var e {{.NamePascal}}Updated
+		if err := json.Unmarshal(data, &e); err != nil {
+			return err
+		}
+{{range .Fields}}		{{$.Receiver}}.{{.NamePascal}} = e.{{.NamePascal}}
+{{end}}		{{.Receiver}}.Version++
+		return nil
+	case "{{.NamePascal}}Archived":
+		{{.Receiver}}.Archived = true
+		{{.Receiver}}.Version++
+		return nil
+	default:
+		return nil
+	}
+}
+
+// Replay rebuilds aggregate state by replaying events from the store.
+func ({{.Receiver}} *{{.NamePascal}}) Replay(events []Event) error {
+	for _, e := range events {
+		if err := {{.Receiver}}.Apply(e.EventName, e.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Exists reports whether the aggregate has been created and not archived.
+func ({{.Receiver}} *{{.NamePascal}}) Exists() bool {
+	return {{.Receiver}}.Version > 0 && !{{.Receiver}}.Archived
+}
+
+// {{.NamePascal}}Created event.
+type {{.NamePascal}}Created struct {
+{{range .Fields}}	{{.NamePascal}} {{.Type}} `json:"{{.JSONTag}}"`
+{{end}}}
+
+// {{.NamePascal}}Updated event.
+type {{.NamePascal}}Updated struct {
+{{range .Fields}}	{{.NamePascal}} {{.Type}} `json:"{{.JSONTag}}"`
+{{end}}}
+
+// {{.NamePascal}}Archived event.
+type {{.NamePascal}}Archived struct{}

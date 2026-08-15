@@ -219,11 +219,18 @@ langsung menyentuh masalah nyata ES (migrasi skema event, retry).
 
 ## 6. Roadmap bertahap
 
-**Fase 1 — fondasi + 1 blueprint.**
-1. Tambah marker `// esb:inject:service-commands` + helper `AddCommand`
-   (generate satu command method + handler + scenario test).
-2. Implement **CRUD** blueprint di atas `AddCommand` (create/update/archive).
-3. Golden test CRUD.
+**Fase 1 — fondasi + 1 blueprint. ✅ SELESAI**
+1. ✅ Tambah marker `// esb:inject:service-commands` di `service.go.tmpl`
+   (fondasi untuk `esb add command` di masa depan).
+2. ✅ Implement **CRUD** blueprint: `esb add recipe crud <name> field:type…`
+   — domain + Created/Updated/Archived (soft delete), service dengan
+   Create/Update/Archive (invariant di aggregate), projection row+worker,
+   query List/Get, handler write-side, scenario test GWT (happy + gagal).
+   Semua atomik lewat satu `injector.Tx`.
+3. ✅ Golden test CRUD (`generator/recipe_crud_test.go`): generate → `go build`
+   → `go test ./service/...` (scenario hijau), termasuk dua entity di satu proyek.
+   Inspector `esb show` juga diperluas (scan query lintas-file di `projection/`,
+   filter file non-handler seperti `response.go`).
 
 **Fase 2 — blueprint domain klasik.**
 4. **Ledger/bank** (invariant + concurrency test).
