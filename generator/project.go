@@ -38,6 +38,7 @@ func InitProject(moduleName, destDir string) error {
 		{"projection_base.go.tmpl", "projection/worker.go"},
 		{"projection_db.go.tmpl", "projection/db.go"},
 		{"projection_query.go.tmpl", "projection/query.go"},
+		{"projection_repository.go.tmpl", "projection/repository.go"},
 		{"server_routes.go.tmpl", "server/routes.go"},
 		{"wire_wire.go.tmpl", "wire/wire.go"},
 	}

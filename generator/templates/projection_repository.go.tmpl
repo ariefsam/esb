@@ -1,0 +1,96 @@
+package projection
+
+import (
+	"context"
+
+	"gorm.io/gorm"
+)
+
+// Repository provides generic CRUD query operations for any GORM-mapped row type.
+// Instantiate with NewRepository[YourRow](db).
+//
+// Basic methods (GetByID, List, etc.) use the struct type parameter T.
+// The Paginate method uses a Go 1.27 generic method parameter R to transform
+// rows into a different type (e.g. an API response DTO).
+type Repository[T any] struct {
+	db *gorm.DB
+}
+
+// NewRepository creates a Repository for the given row type.
+func NewRepository[T any](db *gorm.DB) *Repository[T] {
+	return &Repository[T]{db: db}
+}
+
+// GetByID returns a single row by its aggregate_id (primary key convention).
+func (r *Repository[T]) GetByID(ctx context.Context, id string) (*T, error) {
+	var row T
+	if err := r.db.WithContext(ctx).Where("aggregate_id = ?", id).First(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// GetBy returns a single row matching column = value.
+func (r *Repository[T]) GetBy(ctx context.Context, column string, value any) (*T, error) {
+	var row T
+	if err := r.db.WithContext(ctx).Where(column+" = ?", value).First(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// List returns all rows.
+func (r *Repository[T]) List(ctx context.Context) ([]T, error) {
+	var rows []T
+	err := r.db.WithContext(ctx).Find(&rows).Error
+	return rows, err
+}
+
+// ListWhere returns rows matching column = value.
+func (r *Repository[T]) ListWhere(ctx context.Context, column string, value any) ([]T, error) {
+	var rows []T
+	err := r.db.WithContext(ctx).Where(column+" = ?", value).Find(&rows).Error
+	return rows, err
+}
+
+// Paginate returns a page of rows transformed into type R using the provided
+// transform function. This is a Go 1.27 generic method — R is a type parameter
+// on the method itself, independent of the struct's T parameter.
+//
+// Example:
+//
+//	type ProductResponse struct { ID string; Name string }
+//	repo := NewRepository[ProductRow](db)
+//	results, total, err := repo.Paginate[ProductResponse](ctx, 1, 20,
+//	    func(row ProductRow) ProductResponse {
+//	        return ProductResponse{ID: row.AggregateID, Name: row.Name}
+//	    },
+//	)
+func (r *Repository[T]) Paginate[R any](ctx context.Context, page, pageSize int, transform func(T) R) ([]R, int64, error) {
+	var total int64
+	r.db.WithContext(ctx).Model(new(T)).Count(&total)
+
+	var rows []T
+	offset := (page - 1) * pageSize
+	err := r.db.WithContext(ctx).Offset(offset).Limit(pageSize).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	results := make([]R, len(rows))
+	for i, row := range rows {
+		results[i] = transform(row)
+	}
+	return results, total, nil
+}
+
+// Query returns a scoped *gorm.DB for building custom queries when the
+// generic methods are not sufficient.
+//
+// Example:
+//
+//	var rows []ProductRow
+//	repo.Query(ctx).Where("price > ?", 1000).Order("created_at DESC").Find(&rows)
+func (r *Repository[T]) Query(ctx context.Context) *gorm.DB {
+	return r.db.WithContext(ctx).Model(new(T))
+}

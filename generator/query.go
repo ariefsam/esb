@@ -61,8 +61,6 @@ const queryFuncTmpl = `
 // {{.QueryNamePascal}} queries {{.AggregateNamePascal}} rows.
 // TODO: add filter parameters as needed.
 func {{.QueryNamePascal}}(ctx context.Context, db *gorm.DB) ([]{{.AggregateNamePascal}}Row, error) {
-	var rows []{{.AggregateNamePascal}}Row
-	err := db.WithContext(ctx).Find(&rows).Error
-	return rows, err
+	return NewRepository[{{.AggregateNamePascal}}Row](db).List(ctx)
 }
 `

@@ -10,6 +10,7 @@ import (
 // in insertion order.
 func ListUnpublished{{.NamePascal}}Outbox(ctx context.Context, db *gorm.DB) ([]{{.NamePascal}}OutboxRow, error) {
 	var rows []{{.NamePascal}}OutboxRow
-	err := db.WithContext(ctx).Where("published_at = 0").Order("id ASC").Find(&rows).Error
+	err := NewRepository[{{.NamePascal}}OutboxRow](db).Query(ctx).
+		Where("published_at = 0").Order("id ASC").Find(&rows).Error
 	return rows, err
 }

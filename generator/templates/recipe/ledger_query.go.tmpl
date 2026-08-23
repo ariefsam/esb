@@ -8,17 +8,14 @@ import (
 
 // Get{{.NamePascal}}Balance returns the current balance row for an account.
 func Get{{.NamePascal}}Balance(ctx context.Context, db *gorm.DB, id string) (*{{.NamePascal}}BalanceRow, error) {
-	var row {{.NamePascal}}BalanceRow
-	if err := db.WithContext(ctx).Where("aggregate_id = ?", id).First(&row).Error; err != nil {
-		return nil, err
-	}
-	return &row, nil
+	return NewRepository[{{.NamePascal}}BalanceRow](db).GetByID(ctx, id)
 }
 
 // List{{.NamePascal}}Entries returns the account statement (append-only ledger
 // lines) in posting order.
 func List{{.NamePascal}}Entries(ctx context.Context, db *gorm.DB, id string) ([]{{.NamePascal}}EntryRow, error) {
 	var rows []{{.NamePascal}}EntryRow
-	err := db.WithContext(ctx).Where("aggregate_id = ?", id).Order("id ASC").Find(&rows).Error
+	err := NewRepository[{{.NamePascal}}EntryRow](db).Query(ctx).
+		Where("aggregate_id = ?", id).Order("id ASC").Find(&rows).Error
 	return rows, err
 }

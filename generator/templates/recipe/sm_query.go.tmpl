@@ -8,17 +8,11 @@ import (
 
 // Get{{.NamePascal}} returns a single {{.NamePascal}} row by aggregate ID.
 func Get{{.NamePascal}}(ctx context.Context, db *gorm.DB, id string) (*{{.NamePascal}}Row, error) {
-	var row {{.NamePascal}}Row
-	if err := db.WithContext(ctx).Where("aggregate_id = ?", id).First(&row).Error; err != nil {
-		return nil, err
-	}
-	return &row, nil
+	return NewRepository[{{.NamePascal}}Row](db).GetByID(ctx, id)
 }
 
 // List{{.NamePascal}}sByState returns all {{.NamePascal}} rows currently in the
 // given state.
 func List{{.NamePascal}}sByState(ctx context.Context, db *gorm.DB, state string) ([]{{.NamePascal}}Row, error) {
-	var rows []{{.NamePascal}}Row
-	err := db.WithContext(ctx).Where("state = ?", state).Find(&rows).Error
-	return rows, err
+	return NewRepository[{{.NamePascal}}Row](db).ListWhere(ctx, "state", state)
 }
