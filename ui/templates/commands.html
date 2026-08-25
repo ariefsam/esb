@@ -8,7 +8,7 @@
 <div class="flash error">{{.Error}}</div>
 {{end}}
 {{if .Flash}}
-<div class="flash">{{.Flash}}</div>
+<div class="flash success">{{.Flash}}</div>
 {{end}}
 
 {{range .Groups}}
@@ -18,42 +18,105 @@
 </section>
 {{range .Commands}}
 <section class="cmd">
-  <h3>{{.Label}}</h3>
-  <p class="muted">{{.Description}}</p>
+  <div class="cmd-header">
+    <div>
+      <h3>{{.Label}}</h3>
+      <p class="muted">{{.Description}}</p>
+    </div>
+  </div>
   {{if .Details}}
   <ul class="cmd-details">
     {{range .Details}}<li>{{.}}</li>{{end}}
   </ul>
   {{end}}
-  <form method="POST" action="/commands/execute" data-cmd="{{.ID}}">
+  <form method="POST" action="/commands/execute" data-cmd="{{.ID}}" class="cmd-form">
     <input type="hidden" name="command" value="{{.ID}}">
     <div class="grid">
       {{range .Fields}}
-      <label>
-        <span>{{.Label}}{{if .Required}} *{{end}}</span>
+      <div class="field-group">
+        <label for="field-{{.Name}}">
+          <span>{{.Label}}{{if .Required}} <span class="required">*</span>{{end}}</span>
+        </label>
         {{if eq .Type "list"}}
-        <textarea data-field-name="{{.Name}}" data-field-type="list"
-                  name="{{.Name}}" rows="4" placeholder="{{.Placeholder}}"
+        <textarea id="field-{{.Name}}" data-field-name="{{.Name}}" data-field-type="list"
+                  class="field-input" name="{{.Name}}" rows="4" 
+                  placeholder="{{.Placeholder}}"
                   {{if .Required}}required{{end}}></textarea>
         {{else}}
-        <input type="text" data-field-name="{{.Name}}" data-field-type="text"
-               name="{{.Name}}" placeholder="{{.Placeholder}}"
-               {{if .Required}}required{{end}}>
+        <div class="input-wrapper">
+          <input type="text" id="field-{{.Name}}" data-field-name="{{.Name}}" 
+                 data-field-type="text" class="field-input" name="{{.Name}}" 
+                 placeholder="{{.Placeholder}}"
+                 {{if .Required}}required{{end}} 
+                 list="suggestions-{{.Name}}" autocomplete="off">
+          <!-- Datalist untuk smart suggestions akan ditambah via JavaScript -->
+          <datalist id="suggestions-{{.Name}}"></datalist>
+        </div>
         {{end}}
-        {{if .Help}}<small class="muted">{{.Help}}</small>{{end}}
-      </label>
+        {{if .Help}}<small class="field-help">💡 {{.Help}}</small>{{end}}
+      </div>
       {{end}}
     </div>
-    <div class="preview">
-      <strong>preview:</strong>
-      <code data-preview></code>
+    
+    <div class="preview-section">
+      <div class="preview-header">
+        <span class="preview-label">📋 Command Preview</span>
+        <button type="button" class="btn-copy" data-copy-preview title="Copy to clipboard">Copy</button>
+      </div>
+      <div class="preview">
+        <code data-preview>esb {{.ID}}</code>
+      </div>
     </div>
+    
     <div class="form-actions">
-      <button type="submit">Run command</button>
-      <small class="muted">project root: <code>{{$.Project.ModuleName}}</code></small>
+      <button type="submit" class="btn-primary">▶ Run Command</button>
+      <small class="muted">module: <code>{{$.Project.ModuleName}}</code></small>
     </div>
   </form>
 </section>
 {{end}}
 {{end}}
+
+<script>
+// Real-time preview & field suggestions
+document.querySelectorAll('.cmd-form').forEach(form => {
+  const previewEl = form.querySelector('[data-preview]');
+  const cmdId = form.dataset.cmd;
+  const fields = form.querySelectorAll('.field-input');
+  
+  const updatePreview = () => {
+    let cmd = `esb ${cmdId}`;
+    fields.forEach(field => {
+      const val = field.value.trim();
+      if (val) {
+        if (field.dataset.fieldType === 'list') {
+          val.split('\n').filter(v => v.trim()).forEach(v => {
+            cmd += ` ${v.trim()}`;
+          });
+        } else {
+          cmd += ` ${val}`;
+        }
+      }
+    });
+    previewEl.textContent = cmd;
+  };
+  
+  // Update preview on input
+  fields.forEach(field => {
+    field.addEventListener('input', updatePreview);
+  });
+  
+  // Copy button handler
+  form.querySelector('.btn-copy')?.addEventListener('click', e => {
+    e.preventDefault();
+    const text = previewEl.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = e.target;
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(() => btn.textContent = orig, 2000);
+    });
+  });
+});
+</script>
 {{end}}
