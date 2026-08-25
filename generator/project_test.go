@@ -122,3 +122,66 @@ func TestInitProject_WireReusesProjectionDBForDefaultEmbeddedStore(t *testing.T)
 		t.Fatal("generated wiring does not pass the projection DB handle to the embedded store")
 	}
 }
+
+// TestFullAddWorkflow_GeneratesCompilableProject exercises the complete
+// scaffolding sequence: init → add aggregate → add event → add handler →
+// add query → add projection, then verifies the result compiles.
+// This is the regression test for C1/C2 — ensures all add commands preserve
+// compilability.
+func TestFullAddWorkflow_GeneratesCompilableProject(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "test-shop")
+	if err := InitProject("example.com/test-shop", dest); err != nil {
+		t.Fatalf("InitProject() error = %v", err)
+	}
+
+	// Change to project dir for all subsequent operations.
+	oldCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() = %v", err)
+	}
+	if err := os.Chdir(dest); err != nil {
+		t.Fatalf("Chdir(%s) = %v", dest, err)
+	}
+	defer os.Chdir(oldCwd)
+
+	// Sequence: add aggregate → add event → add handler → add query → add projection.
+	if err := AddAggregate("order"); err != nil {
+		t.Fatalf("AddAggregate(order) = %v", err)
+	}
+
+	if err := AddEvent("order", "OrderPlaced", []FieldDef{
+		{NamePascal: "Amount", JSONTag: "amount", Type: "int64"},
+		{NamePascal: "CustomerID", JSONTag: "customer_id", Type: "string"},
+	}); err != nil {
+		t.Fatalf("AddEvent(OrderPlaced) = %v", err)
+	}
+
+	if err := AddEvent("order", "OrderCanceled", []FieldDef{
+		{NamePascal: "Reason", JSONTag: "reason", Type: "string"},
+	}); err != nil {
+		t.Fatalf("AddEvent(OrderCanceled) = %v", err)
+	}
+
+	if err := AddHandler("place_order", "order"); err != nil {
+		t.Fatalf("AddHandler(place_order, order) = %v", err)
+	}
+
+	if err := AddHandler("cancel_order", "order"); err != nil {
+		t.Fatalf("AddHandler(cancel_order, order) = %v", err)
+	}
+
+	if err := AddQuery("orders_by_customer", "order"); err != nil {
+		t.Fatalf("AddQuery(orders_by_customer) = %v", err)
+	}
+
+	if err := AddProjection("customer_orders", []string{"order"}); err != nil {
+		t.Fatalf("AddProjection(customer_orders) = %v", err)
+	}
+
+	// Verify the project compiles after all modifications.
+	cmd := exec.Command("go", "build", "./...")
+	cmd.Dir = dest
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated project does not compile after full add workflow:\nerror: %v\noutput:\n%s", err, output)
+	}
+}
