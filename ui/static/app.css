@@ -327,24 +327,118 @@ footer {
   color: var(--accent);
 }
 
-/* Primary button styling */
-.btn-primary {
-  background: var(--accent);
-  color: #ffffff;
-  padding: 9px 18px;
-  border: 0;
+/* Field Builder - Visual form for structured list inputs */
+.field-builder-wrapper {
+  background: #f9fafb;
+  border: 1px solid var(--border);
   border-radius: 5px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.field-builder-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.field-builder-row {
+  display: grid;
+  grid-template-columns: 1fr 140px 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.field-builder-row:hover {
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 102, 204, 0.1);
+}
+
+.field-name-input {
+  background: #ffffff;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.field-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.field-type-select {
+  background: #ffffff;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
   font-weight: 500;
-  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.btn-primary:hover {
-  background: #0052a3;
-  box-shadow: 0 2px 8px rgba(0, 102, 204, 0.2);
+
+.field-type-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
-.btn-primary:active {
-  transform: scale(0.98);
+
+.field-type-select option {
+  padding: 4px 8px;
+  background: #ffffff;
+  color: var(--fg);
+}
+
+.btn-remove-field {
+  background: #fee2e2;
+  color: var(--danger);
+  border: 1px solid #fecaca;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-remove-field:hover {
+  background: #fecaca;
+  border-color: var(--danger);
+}
+
+.btn-add-field {
+  background: #e0eeff;
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: fit-content;
+}
+
+.btn-add-field:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #0052a3;
 }
 
 /* Aggregate page: add/delete event */
@@ -367,3 +461,117 @@ button.danger:hover { background: #b91c1c; }
 .btn-cancel { margin-left: 12px; align-self: center; color: var(--fg-mute); text-decoration: none; font-size: 12px; }
 label.ack { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0; max-width: 70ch; }
 label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer; }
+
+/* Field Builder - Visual form for structured list inputs */
+.field-builder-wrapper {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.field-builder-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.field-builder-row {
+  display: grid;
+  grid-template-columns: 1fr 140px 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.field-builder-row:hover {
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 102, 204, 0.1);
+}
+
+.field-name-input {
+  background: #ffffff;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.field-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.field-type-select {
+  background: #ffffff;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.field-type-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.field-type-select option {
+  padding: 4px 8px;
+  background: #ffffff;
+  color: var(--fg);
+}
+
+.btn-remove-field {
+  background: #fee2e2;
+  color: var(--danger);
+  border: 1px solid #fecaca;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-remove-field:hover {
+  background: #fecaca;
+  border-color: var(--danger);
+}
+
+.btn-add-field {
+  background: #e0eeff;
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: fit-content;
+}
+
+.btn-add-field:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #0052a3;
+}
