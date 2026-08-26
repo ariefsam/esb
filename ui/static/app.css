@@ -575,3 +575,19 @@ label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer;
   border-color: var(--accent);
   color: #0052a3;
 }
+/* Prevent the field controls from overflowing their grid column. */
+.field-builder-wrapper,
+.field-builder-row {
+  min-width: 0;
+  max-width: 100%;
+}
+.field-builder-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 40px;
+}
+.field-builder-row > * {
+  min-width: 0;
+}
+.field-builder-row .field-type-select,
+.field-builder-row .btn-remove-field {
+  width: 100%;
+}

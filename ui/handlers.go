@@ -200,11 +200,22 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	groups := PublicCommandGroups()
+	commands := PublicCommands()
+	aggregateNames := make([]string, 0, len(model.Aggregate))
+	for _, aggregate := range model.Aggregate {
+		aggregateNames = append(aggregateNames, aggregate.Name)
+	}
+	addAggregateSuggestions(commands, aggregateNames)
+	for i := range groups {
+		addAggregateSuggestions(groups[i].Commands, aggregateNames)
+	}
+
 	page := CommandsPage{
 		Kind:     PageCommands,
 		Project:  model,
-		Groups:   PublicCommandGroups(),
-		Commands: PublicCommands(),
+		Groups:   groups,
+		Commands: commands,
 	}
 
 	s.renderLayout(w, http.StatusOK, Layout{
@@ -214,6 +225,19 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		Body:     s.renderBody(page),
 		Nav:      defaultNav("commands"),
 	})
+}
+
+func addAggregateSuggestions(commands []CommandView, aggregates []string) {
+	for i := range commands {
+		if commands[i].ID != "add-projection" {
+			continue
+		}
+		for j := range commands[i].Fields {
+			if commands[i].Fields[j].Name == "aggregates" {
+				commands[i].Fields[j].Suggestions = aggregates
+			}
+		}
+	}
 }
 
 // handleExecute accepts POST /commands/execute. Anything else returns

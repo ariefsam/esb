@@ -39,7 +39,7 @@
         </label>
         {{if eq .Type "list"}}
         <!-- Field Builder for list-type fields (e.g., Fields in add-event) -->
-        <div class="field-builder-wrapper" data-field-name="{{.Name}}">
+        <div class="field-builder-wrapper" data-field-name="{{.Name}}" data-suggestions="{{join .Suggestions ","}}">
           <div class="field-builder-inputs">
             <!-- Rows will be injected here by JavaScript -->
           </div>
@@ -83,117 +83,4 @@
 {{end}}
 {{end}}
 
-<script>
-const SUPPORTED_TYPES = ['string', 'int', 'int64', 'float64', 'bool', 'time.Time', 'uuid.UUID'];
-
-// Field Builder for list-type fields (amount:int64, currency:string, etc.)
-function initFieldBuilder() {
-  document.querySelectorAll('.field-builder-wrapper').forEach(wrapper => {
-    const fieldName = wrapper.dataset.fieldName;
-    const textarea = document.getElementById(`field-${fieldName}`);
-    const inputsContainer = wrapper.querySelector('.field-builder-inputs');
-    const addBtn = wrapper.querySelector('.btn-add-field');
-    
-    const syncToTextarea = () => {
-      const rows = inputsContainer.querySelectorAll('.field-builder-row');
-      const lines = Array.from(rows).map(row => {
-        const nameInput = row.querySelector('.field-name-input');
-        const typeSelect = row.querySelector('.field-type-select');
-        return nameInput.value.trim() && typeSelect.value 
-          ? `${nameInput.value}:${typeSelect.value}` 
-          : '';
-      }).filter(Boolean);
-      textarea.value = lines.join('\n');
-      textarea.dispatchEvent(new Event('input')); // Trigger preview update
-    };
-    
-    const addFieldRow = (name = '', type = 'string') => {
-      const row = document.createElement('div');
-      row.className = 'field-builder-row';
-      row.innerHTML = `
-        <input type="text" class="field-name-input" placeholder="fieldName" value="${name}" />
-        <select class="field-type-select">
-          ${SUPPORTED_TYPES.map(t => `<option value="${t}" ${t === type ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-        <button type="button" class="btn-remove-field" title="Remove field">×</button>
-      `;
-      
-      row.querySelector('.field-name-input').addEventListener('input', syncToTextarea);
-      row.querySelector('.field-type-select').addEventListener('change', syncToTextarea);
-      row.querySelector('.btn-remove-field').addEventListener('click', e => {
-        e.preventDefault();
-        row.remove();
-        syncToTextarea();
-      });
-      
-      inputsContainer.appendChild(row);
-    };
-    
-    // Parse existing textarea content
-    const initFromTextarea = () => {
-      const lines = textarea.value.split('\n').filter(l => l.trim());
-      inputsContainer.innerHTML = '';
-      if (lines.length > 0) {
-        lines.forEach(line => {
-          const [name, type] = line.split(':');
-          if (name && type) addFieldRow(name.trim(), type.trim());
-        });
-      } else {
-        addFieldRow(); // Add one empty row if empty
-      }
-    };
-    
-    initFromTextarea();
-    
-    addBtn.addEventListener('click', e => {
-      e.preventDefault();
-      addFieldRow();
-    });
-  });
-}
-
-// Real-time preview & field suggestions
-document.querySelectorAll('.cmd-form').forEach(form => {
-  const previewEl = form.querySelector('[data-preview]');
-  const cmdId = form.dataset.cmd;
-  const fields = form.querySelectorAll('.field-input');
-  
-  const updatePreview = () => {
-    let cmd = `esb ${cmdId}`;
-    fields.forEach(field => {
-      const val = field.value.trim();
-      if (val) {
-        if (field.dataset.fieldType === 'list') {
-          val.split('\n').filter(v => v.trim()).forEach(v => {
-            cmd += ` ${v.trim()}`;
-          });
-        } else {
-          cmd += ` ${val}`;
-        }
-      }
-    });
-    previewEl.textContent = cmd;
-  };
-  
-  // Update preview on input
-  fields.forEach(field => {
-    field.addEventListener('input', updatePreview);
-  });
-  
-  // Copy button handler
-  form.querySelector('.btn-copy')?.addEventListener('click', e => {
-    e.preventDefault();
-    const text = previewEl.textContent;
-    navigator.clipboard.writeText(text).then(() => {
-      const btn = e.target;
-      const orig = btn.textContent;
-      btn.textContent = '✓ Copied!';
-      setTimeout(() => btn.textContent = orig, 2000);
-    });
-  });
-});
-
-// Initialize on page load
-initFieldBuilder();
-</script>
 {{end}}

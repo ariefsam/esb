@@ -7,6 +7,8 @@
  * collapsible output sections.
  */
 (function () {
+  var supportedTypes = ["string", "int", "int64", "float64", "bool", "time.Time", "uuid.UUID"];
+
   function escAttr(v) {
     return String(v).replace(/[&"<>]/g, function (c) {
       return ({ "&": "&amp;", '"': "&quot;", "<": "&lt;", ">": "&gt;" })[c];
@@ -61,7 +63,99 @@
     }
   }
 
+  function initFieldBuilders() {
+    document.querySelectorAll(".field-builder-wrapper").forEach(function (wrapper) {
+      var fieldName = wrapper.getAttribute("data-field-name");
+      var textarea = document.getElementById("field-" + fieldName);
+      var inputs = wrapper.querySelector(".field-builder-inputs");
+      var addButton = wrapper.querySelector(".btn-add-field");
+      var suggestions = (wrapper.getAttribute("data-suggestions") || "").split(",").filter(Boolean);
+      if (!textarea || !inputs || !addButton) return;
+
+      var sync = function () {
+        var lines = [];
+        inputs.querySelectorAll(".field-builder-row").forEach(function (row) {
+          var name = row.querySelector(".field-name-input").value.trim();
+          var type = row.querySelector(".field-type-select").value;
+          if (name && type) lines.push(name + ":" + type);
+        });
+        textarea.value = lines.join("\n");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      var addRow = function (name, type) {
+        var row = document.createElement("div");
+        row.className = "field-builder-row";
+
+        var nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.className = "field-name-input";
+        nameInput.placeholder = "fieldName";
+        nameInput.value = name || "";
+        if (suggestions.length) {
+          var listID = "suggestions-" + fieldName;
+          var datalist = document.getElementById(listID);
+          if (!datalist) {
+            datalist = document.createElement("datalist");
+            datalist.id = listID;
+            suggestions.forEach(function (suggestion) {
+              var option = document.createElement("option");
+              option.value = suggestion;
+              datalist.appendChild(option);
+            });
+            wrapper.appendChild(datalist);
+          }
+          nameInput.setAttribute("list", listID);
+        }
+
+        var typeSelect = document.createElement("select");
+        typeSelect.className = "field-type-select";
+        supportedTypes.forEach(function (supportedType) {
+          var option = document.createElement("option");
+          option.value = supportedType;
+          option.textContent = supportedType;
+          option.selected = supportedType === (type || "string");
+          typeSelect.appendChild(option);
+        });
+
+        var removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "btn-remove-field";
+        removeButton.title = "Remove field";
+        removeButton.textContent = "×";
+
+        nameInput.addEventListener("input", sync);
+        typeSelect.addEventListener("change", sync);
+        removeButton.addEventListener("click", function () {
+          row.remove();
+          sync();
+        });
+        row.appendChild(nameInput);
+        row.appendChild(typeSelect);
+        row.appendChild(removeButton);
+        inputs.appendChild(row);
+      };
+
+      var lines = textarea.value.split(/\r?\n/).filter(function (line) {
+        return line.trim();
+      });
+      inputs.innerHTML = "";
+      if (lines.length) {
+        lines.forEach(function (line) {
+          var pair = line.split(":");
+          if (pair[0] && pair[1]) addRow(pair[0].trim(), pair.slice(1).join(":").trim());
+        });
+      } else {
+        addRow();
+      }
+      addButton.addEventListener("click", function () {
+        addRow();
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    initFieldBuilders();
     document.querySelectorAll("form[data-cmd]").forEach(function (form) {
       var fields = parseFields(form);
       var out = form.querySelector("[data-preview]");

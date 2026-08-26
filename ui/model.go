@@ -155,6 +155,7 @@ type CommandField struct {
 	Required    bool
 	Type        string // "text" or "list"
 	Help        string
+	Suggestions []string
 }
 
 // RunStatus is the lifecycle of a single command execution.
