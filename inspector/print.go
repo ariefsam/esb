@@ -27,6 +27,8 @@ func Print(w io.Writer, m ProjectModel, focus string) error {
 	printProjections(&buf, m, focus)
 	printHandlers(&buf, m, focus)
 	printQueries(&buf, m, focus)
+	printFlow(&buf, m, focus)
+	printStats(&buf, m, focus)
 	if focus == "" {
 		printStorage(&buf, m)
 	}
@@ -211,6 +213,78 @@ func printStorage(w io.Writer, m ProjectModel) {
 	}
 	fmt.Fprintln(w, "  Event store: EventRepository -> repository.EventStoreAdapter -> eventstore.Client")
 	fmt.Fprintf(w, "  Storage mode: %s\n", m.Storage.String())
+	fmt.Fprintln(w)
+}
+
+// printFlow renders one line per event: which command produces it and which
+// worker consumes it. It is the CLI half of the /flow page — the same
+// BuildEventFlows data, so the two views cannot drift apart.
+//
+// Like the storage and stats sections it is skipped in focused mode: the
+// focused summary is contractually a single screen (TestPrint_LineCount), and
+// a per-event block does not fit inside that budget. `esb show` without an
+// argument, or the /flow page, is where the per-event detail lives.
+func printFlow(w io.Writer, m ProjectModel, focus string) {
+	if focus != "" {
+		return
+	}
+	flows := BuildEventFlows(m)
+
+	fmt.Fprintln(w, "Flow — command → event → projection")
+	fmt.Fprintln(w, strings.Repeat("-", 78))
+	if len(flows) == 0 {
+		fmt.Fprintln(w, "  (belum ada event)")
+		fmt.Fprintln(w)
+		return
+	}
+
+	current := ""
+	for _, f := range flows {
+		if f.Aggregate != current {
+			current = f.Aggregate
+			fmt.Fprintf(w, "  %s\n", current)
+		}
+		fmt.Fprintf(w, "    %-28s %-24s %s\n",
+			f.Event,
+			"emit: "+fallback(strings.Join(f.Producers, ", "), "-"),
+			"handled: "+fallback(strings.Join(f.Consumers, ", "), "-"))
+		if f.Warn != "" {
+			fmt.Fprintf(w, "    %-28s ⚠ %s\n", "", f.Warn)
+		}
+	}
+	fmt.Fprintln(w)
+}
+
+// printStats renders the derived counters plus a one-line gap tally. The gap
+// details live in the UI; here we only say how many there are so `esb show`
+// stays a single screen.
+func printStats(w io.Writer, m ProjectModel, focus string) {
+	if focus != "" {
+		return
+	}
+	s := BuildStats(m)
+
+	fmt.Fprintln(w, "Stats")
+	fmt.Fprintln(w, strings.Repeat("-", 78))
+	fmt.Fprintf(w, "  aggregates %d   events %d   commands %d   handler methods %d\n",
+		s.Aggregates, s.Events, s.Commands, s.HandlerMethods)
+	fmt.Fprintf(w, "  projections %d (%d multi)   queries %d   avg field/event %.1f\n",
+		s.Projections, s.MultiProjections, s.Queries, s.AvgFieldsPerEvent)
+	fmt.Fprintf(w, "  event tanpa producer %d   event tanpa consumer %d   command dinamis %d\n",
+		s.UnproducedEvents, s.UnconsumedEvents, s.DynamicCommands)
+
+	warn := 0
+	for _, g := range s.Gaps {
+		if g.Severity == "warn" {
+			warn++
+		}
+	}
+	if len(s.Gaps) == 0 {
+		fmt.Fprintln(w, "  gaps: tidak ada")
+	} else {
+		fmt.Fprintf(w, "  gaps: %d (%d warn, %d info) — detail di 'esb ui' halaman /flow\n",
+			len(s.Gaps), warn, len(s.Gaps)-warn)
+	}
 	fmt.Fprintln(w)
 }
 

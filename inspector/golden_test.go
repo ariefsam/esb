@@ -150,3 +150,109 @@ func aggNames(m inspector.ProjectModel) []string {
 	}
 	return out
 }
+
+// TestGolden_FlowEdgesFromRecipeOutput is the coupling contract for the
+// per-event flow passes. Unlike the aggregate-level scanners, these read call
+// expressions inside generated bodies — `s.store(ctx, agg, "X", …)`,
+// `h.svc.X(…)`, and `switch e.EventName`. A recipe is the only generator path
+// that emits all three, so we scaffold one and assert the full chain
+// handler → command → event → projection is recovered. Reword any of those
+// three shapes and this fails here instead of shipping a silently empty graph.
+func TestGolden_FlowEdgesFromRecipeOutput(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if err := generator.InitProject("example.com/shop", dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := generator.AddCRUD("product", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := inspector.Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+
+	// --- service commands and the events they emit ---
+	var svc *inspector.Service
+	for i := range m.Service {
+		if m.Service[i].Name == "product" {
+			svc = &m.Service[i]
+		}
+	}
+	if svc == nil {
+		t.Fatalf("inspector did not find the product service; services = %+v", m.Service)
+	}
+	if svc.Aggregate != "product" {
+		t.Errorf("service aggregate = %q, want %q", svc.Aggregate, "product")
+	}
+	emits := map[string][]string{}
+	for _, c := range svc.Commands {
+		emits[c.Name] = c.Emits
+	}
+	for cmd, want := range map[string]string{
+		"Create":  "ProductCreated",
+		"Update":  "ProductUpdated",
+		"Archive": "ProductArchived",
+	} {
+		if !slices.Contains(emits[cmd], want) {
+			t.Errorf("command %s emits = %v, want to contain %s", cmd, emits[cmd], want)
+		}
+	}
+
+	// --- handler methods delegating to those commands ---
+	var handlerCalls []string
+	for _, h := range m.Handler {
+		if h.Name != "product" {
+			continue
+		}
+		for _, method := range h.Methods {
+			handlerCalls = append(handlerCalls, method.Calls...)
+		}
+	}
+	for _, want := range []string{"Create", "Update", "Archive"} {
+		if !slices.Contains(handlerCalls, want) {
+			t.Errorf("handler calls = %v, want to contain %s", handlerCalls, want)
+		}
+	}
+
+	// --- worker cases ---
+	p := findProjection(m, "product")
+	if p == nil {
+		t.Fatalf("inspector did not find the product projection; projections = %+v", m.Projection)
+	}
+	for _, want := range []string{"ProductCreated", "ProductUpdated", "ProductArchived"} {
+		if !slices.Contains(p.Events, want) {
+			t.Errorf("worker events = %v, want to contain %s", p.Events, want)
+		}
+	}
+
+	// --- the derived graph must contain the whole chain, unbroken ---
+	g := inspector.BuildFlow(m, "")
+	hasEdge := func(from, to string) bool {
+		for _, e := range g.Edges {
+			if e.From == from && e.To == to {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range [][2]string{
+		{"handler:product.Create", "command:product.Create"},
+		{"command:product.Create", "event:product/ProductCreated"},
+		{"event:product/ProductCreated", "projection:product"},
+	} {
+		if !hasEdge(want[0], want[1]) {
+			t.Errorf("flow graph missing edge %s -> %s; edges = %+v", want[0], want[1], g.Edges)
+		}
+	}
+
+	// A freshly scaffolded recipe is fully wired, so nothing should be
+	// reported as a dead-end event.
+	s := inspector.BuildStats(m)
+	if s.UnproducedEvents != 0 || s.UnconsumedEvents != 0 {
+		t.Errorf("recipe output reported dead ends: unproduced %d, unconsumed %d; gaps = %+v",
+			s.UnproducedEvents, s.UnconsumedEvents, s.Gaps)
+	}
+}

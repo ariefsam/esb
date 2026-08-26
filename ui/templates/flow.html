@@ -1,0 +1,115 @@
+{{define "flow"}}
+<section class="hero">
+  <h1>Flow &amp; statistik</h1>
+  <p class="muted">
+    Dibaca langsung dari AST proyek: handler → service command → event → projection → query.
+  </p>
+</section>
+
+<h2>Statistik proyek</h2>
+<p class="muted small">Selalu dihitung untuk seluruh proyek — filter di bawah hanya mempersempit graf.</p>
+<section class="cards">
+  <div class="card"><div class="num">{{.Stats.Aggregates}}</div><div class="lab">aggregates</div></div>
+  <div class="card"><div class="num">{{.Stats.Events}}</div><div class="lab">events</div></div>
+  <div class="card"><div class="num">{{.Stats.Commands}}</div><div class="lab">commands</div></div>
+  <div class="card"><div class="num">{{.Stats.HandlerMethods}}</div><div class="lab">handler methods</div></div>
+  <div class="card"><div class="num">{{.Stats.Projections}}</div><div class="lab">projections</div></div>
+  <div class="card"><div class="num">{{.Stats.Queries}}</div><div class="lab">queries</div></div>
+  <div class="card"><div class="num">{{printf "%.1f" .Stats.AvgFieldsPerEvent}}</div><div class="lab">avg field / event</div></div>
+  <div class="card {{if .Stats.UnconsumedEvents}}card-warn{{end}}">
+    <div class="num">{{.Stats.UnconsumedEvents}}</div><div class="lab">event tanpa consumer</div>
+  </div>
+  <div class="card {{if .Stats.UnproducedEvents}}card-warn{{end}}">
+    <div class="num">{{.Stats.UnproducedEvents}}</div><div class="lab">event tanpa producer</div>
+  </div>
+</section>
+
+<section>
+  <h2>Graph</h2>
+  <form class="flow-filter" method="get" action="/flow">
+    <label for="flow-aggregate">Aggregate</label>
+    <select id="flow-aggregate" name="aggregate">
+      <option value="">— semua —</option>
+      {{range .Aggregates}}
+      <option value="{{.}}" {{if eq . $.Filter}}selected{{end}}>{{.}}</option>
+      {{end}}
+    </select>
+    <button class="btn small" type="submit">Terapkan</button>
+    {{if .Filter}}<a class="btn small" href="/flow">Reset</a>{{end}}
+  </form>
+
+  {{if .SVG.Empty}}
+  <p class="muted">
+    Belum ada yang bisa digambar. Jalankan <a href="/commands?command=add-aggregate">Add aggregate</a>
+    atau sebuah recipe untuk membuat slice pertama.
+  </p>
+  {{else}}
+  <div class="flow-canvas">
+    <svg viewBox="0 0 {{.SVG.Width}} {{.SVG.Height}}" width="{{.SVG.Width}}" height="{{.SVG.Height}}"
+         role="img" aria-label="Diagram alur kode proyek" class="flow-svg">
+      <defs>
+        <marker id="flow-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L8,4 L0,8 z" class="flow-arrow-head" />
+        </marker>
+      </defs>
+
+      {{range .SVG.Columns}}
+      <text x="{{.X}}" y="20" class="flow-col-title">{{.Title}} ({{.Count}})</text>
+      {{end}}
+
+      <g class="flow-edges">
+        {{range .SVG.Edges}}
+        <path d="{{.Path}}" class="flow-edge{{if .Inferred}} flow-edge-inferred{{end}}"
+              marker-end="url(#flow-arrow)" />
+        {{end}}
+      </g>
+
+      <g class="flow-nodes">
+        {{range .SVG.Nodes}}
+        <g class="flow-node flow-node-{{.Kind}}{{if .Warn}} flow-node-warn{{end}}">
+          <title>{{.Full}}</title>
+          <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6" />
+          <text x="{{.X}}" y="{{.LabelY}}" dx="10" class="flow-node-label">{{.Label}}</text>
+          <text x="{{.X}}" y="{{.SubY}}" dx="10" class="flow-node-sub">{{.Sub}}</text>
+        </g>
+        {{end}}
+      </g>
+    </svg>
+  </div>
+  <p class="muted small">
+    Garis putus-putus = relasi hasil inferensi dari penamaan (projection → query),
+    bukan dari pemanggilan yang benar-benar ada di kode. Kotak bergaris oranye = jalur buntu.
+  </p>
+  {{end}}
+</section>
+
+{{if .Stats.Gaps}}
+<section>
+  <h2>Gaps ({{len .Stats.Gaps}})</h2>
+  <table>
+    <thead><tr><th>Level</th><th>Subject</th><th>Keterangan</th></tr></thead>
+    <tbody>
+    {{range .Stats.Gaps}}
+      <tr>
+        <td><span class="badge badge-{{.Severity}}">{{.Severity}}</span></td>
+        <td><code>{{.Subject}}</code></td>
+        <td>{{.Message}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
+<section>
+  <h2>Edges</h2>
+  <p class="muted small">Daftar teks dari graf di atas — berguna untuk copy ke dokumentasi atau review.</p>
+  {{if not .Graph.Edges}}
+  <p class="muted">Belum ada edge yang terdeteksi.</p>
+  {{else}}
+  <pre>{{range .Graph.Edges}}{{.From}} {{if .Inferred}}~&gt;{{else}}-&gt;{{end}} {{.To}}
+{{end}}</pre>
+  {{end}}
+</section>
+{{end}}

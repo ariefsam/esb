@@ -182,6 +182,70 @@ func (s *Server) handleAggregate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleFlow serves `GET /flow`, the derived statistics and the code-flow
+// graph. An `aggregate` query parameter narrows the graph to one aggregate;
+// an unknown value is rejected rather than silently ignored, so a stale
+// bookmark does not quietly render the whole project as if it were filtered.
+func (s *Server) handleFlow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	model, err := inspector.Scan(s.projectRoot)
+	if err != nil {
+		s.renderScanError(w, r, err)
+		return
+	}
+
+	names := make([]string, 0, len(model.Aggregate))
+	for _, a := range model.Aggregate {
+		names = append(names, a.Name)
+	}
+
+	filter := strings.TrimSpace(r.URL.Query().Get("aggregate"))
+	if filter != "" && !contains(names, filter) {
+		s.notFound(w, r, "Aggregate tidak ditemukan",
+			fmt.Sprintf("Aggregate %q tidak ada pada proyek ini.", filter))
+		return
+	}
+
+	graph := inspector.BuildFlow(model, filter)
+	subtitle := "Seluruh proyek"
+	if filter != "" {
+		subtitle = "Filter: " + filter
+	}
+
+	page := FlowPage{
+		Kind:       PageFlow,
+		Project:    model,
+		Stats:      inspector.BuildStats(model),
+		Graph:      graph,
+		SVG:        layoutFlow(graph),
+		Aggregates: names,
+		Filter:     filter,
+	}
+
+	s.renderLayout(w, http.StatusOK, Layout{
+		Title:    "Flow",
+		Subtitle: subtitle,
+		Root:     s.projectRoot,
+		Body:     s.renderBody(page),
+		Nav:      defaultNav("flow"),
+	})
+}
+
+// contains reports whether list holds v.
+func contains(list []string, v string) bool {
+	for _, item := range list {
+		if item == v {
+			return true
+		}
+	}
+	return false
+}
+
 // handleCommands serves the GET /commands form page.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/commands" {
