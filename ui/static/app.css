@@ -591,3 +591,82 @@ label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer;
 .field-builder-row .btn-remove-field {
   width: 100%;
 }
+
+/* ---- Flow page --------------------------------------------------------- */
+/* The graph is a server-rendered SVG (see ui/flow.go): the binary runs
+   offline, so there is no charting library to lean on. Colours come from the
+   same custom properties as the rest of the UI so the diagram stays in theme. */
+
+.card.card-warn { border-color: var(--warn); }
+.card.card-warn .num { color: var(--warn); }
+
+.badge-warn { background: #fef3c7; color: #92400e; }
+.badge-info { background: var(--bg-soft); color: var(--fg-mute); }
+
+.flow-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.flow-filter label { font-size: 12px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.06em; }
+.flow-filter select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+/* The diagram is wider than the page on any real project, so it scrolls
+   inside its own box rather than making the whole page scroll sideways. */
+.flow-canvas {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  padding: 8px;
+}
+.flow-svg { display: block; max-width: none; }
+
+.flow-col-title {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Edges use the muted foreground rather than the border colour: at 1.5px a
+   border-coloured curve is effectively invisible against the card fill. */
+.flow-edge {
+  fill: none;
+  stroke: var(--fg-mute);
+  stroke-width: 1.4;
+  opacity: 0.45;
+}
+.flow-edge-inferred { stroke-dasharray: 4 3; opacity: 0.3; }
+.flow-arrow-head { fill: var(--fg-mute); opacity: 0.55; }
+
+.flow-node rect {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.flow-node-label { font-size: 12px; font-weight: 600; fill: var(--fg); }
+.flow-node-sub { font-size: 10px; fill: var(--fg-mute); }
+
+/* One accent per layer, so a column is identifiable without reading its
+   header once the diagram is scrolled. */
+.flow-node-handler rect { stroke: var(--accent); }
+.flow-node-command rect { stroke: #7c3aed; }
+.flow-node-event rect { fill: var(--accent-soft); stroke: var(--accent); }
+.flow-node-projection rect { stroke: var(--success); }
+.flow-node-query rect { stroke: var(--fg-mute); }
+
+.flow-node-warn rect { stroke: var(--warn); stroke-width: 1.5; }
+.flow-node-warn .flow-node-sub { fill: var(--warn); }
+
+p.small, .muted.small { font-size: 12px; }

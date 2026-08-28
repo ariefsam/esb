@@ -23,6 +23,7 @@ const (
 	PageOverview        PageKind = "overview"
 	PageAggregateDetail PageKind = "aggregate_detail"
 	PageCommands        PageKind = "commands"
+	PageFlow            PageKind = "flow"
 	PageRunDetail       PageKind = "run_detail"
 	PageStorage         PageKind = "storage"
 	PageMigrate         PageKind = "migrate"
@@ -99,6 +100,20 @@ type AggregateDetailPage struct {
 	Queries      []inspector.Query
 	Workers      []inspector.Projection
 	Other        []string
+}
+
+// FlowPage is the view-model for `GET /flow`: the derived statistics, the
+// structural gap list, and the laid-out graph. Graph is kept alongside SVG so
+// the template can render an accessible text fallback of the same edges
+// without the caller re-deriving them.
+type FlowPage struct {
+	Kind       PageKind
+	Project    inspector.ProjectModel
+	Stats      inspector.Stats
+	Graph      inspector.FlowGraph
+	SVG        FlowSVG
+	Aggregates []string // every aggregate name, for the filter control
+	Filter     string   // active aggregate filter ("" = whole project)
 }
 
 // CommandsPage renders the command catalog and the per-command forms.

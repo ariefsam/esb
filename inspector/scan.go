@@ -37,6 +37,7 @@ type ProjectModel struct {
 	Aggregate   []Aggregate // every aggregate discovered in domain/, sorted by aggregate-store name
 	Projection  []Projection
 	Handler     []Handler
+	Service     []Service // command services in service/, sorted by file name
 	Query       []Query
 	Wire        WireGraph
 	Migrate     []string    // GORM models in projection/db.go AutoMigrate
@@ -77,12 +78,20 @@ type Projection struct {
 	Name       string // worker file name without _worker.go suffix
 	Multi      bool
 	Aggregates []string // aggregate names listened to
+	// Events are the event names the worker actually handles, read from the
+	// case labels of its `switch e.EventName`. Empty means the worker
+	// subscribes to the aggregate but has no case for any event yet.
+	Events []string
 }
 
 // Handler is one file in server/handler/.
 type Handler struct {
 	Name      string // snake_case file name (without .go)
 	Aggregate string // resolved via the service field ("" if not detected)
+	// Methods are the exported HTTP methods that delegate to a service
+	// command. A scaffolded handler whose Handle() body is still the
+	// generated TODO calls nothing, so this is empty until it is wired up.
+	Methods []HandlerMethod
 }
 
 // Query is one query function in projection/query.go.
@@ -148,6 +157,9 @@ func Scan(rootDir string) (ProjectModel, error) {
 		return m, err
 	}
 	if err := scanQueries(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
+		return m, err
+	}
+	if err := scanServices(filepath.Join(rootDir, "service"), aggregateNames, &m); err != nil {
 		return m, err
 	}
 	if err := scanWire(filepath.Join(rootDir, "wire", "wire.go"), &m); err != nil {
@@ -308,6 +320,31 @@ func aggregateStoreName(names map[string]string, fileName string) string {
 		return name
 	}
 	return fileName
+}
+
+// resolveRowAggregate maps a projection row's snake_case prefix to an
+// aggregate. An exact match wins; otherwise the longest aggregate name that is
+// a leading path segment of the prefix does, because a recipe is free to shape
+// several rows out of one aggregate ("AccountBalanceRow" and "AccountEntryRow"
+// both belong to "account"). Only whole segments count, so "account_balance"
+// resolves to "account" while "accounting" does not.
+func resolveRowAggregate(names map[string]string, rowPrefix string) string {
+	if name := names[rowPrefix]; name != "" {
+		return name
+	}
+	best, bestFile := "", ""
+	for file, store := range names {
+		if !strings.HasPrefix(rowPrefix, file+"_") {
+			continue
+		}
+		if len(file) > len(bestFile) {
+			best, bestFile = store, file
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return rowPrefix
 }
 
 // eventNames projects EventDetail.Name for callers that only need the
@@ -490,7 +527,11 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 		if pascal, found := handlerServiceAggregate(file); found {
 			agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
 		}
-		m.Handler = append(m.Handler, Handler{Name: handlerName, Aggregate: agg})
+		methods := []HandlerMethod(nil)
+		if structName, ok := declaredStructWithSuffix(file, "Handler"); ok {
+			methods = handlerMethods(file, structName)
+		}
+		m.Handler = append(m.Handler, Handler{Name: handlerName, Aggregate: agg, Methods: methods})
 	}
 
 	sort.Slice(m.Handler, func(i, j int) bool {
@@ -591,6 +632,7 @@ func scanProjections(dir string, aggregateNames map[string]string, m *ProjectMod
 		p := Projection{Name: workerName}
 		isMulti := false
 		if file != nil {
+			p.Events = workerEventNames(file)
 			// The generated declaration derives from the projection name, whose
 			// casing/underscores vary ("balanceAggregateNames",
 			// "sales_reportAggregateNames"). Normalize both sides to lowercase
@@ -737,7 +779,7 @@ func scanQueries(dir string, aggregateNames map[string]string, m *ProjectModel) 
 			}
 			agg := ""
 			if pascal, found := queryRowAggregate(fd); found {
-				agg = aggregateStoreName(aggregateNames, naming.ToSnakeCase(pascal))
+				agg = resolveRowAggregate(aggregateNames, naming.ToSnakeCase(pascal))
 			}
 			m.Query = append(m.Query, Query{Name: fd.Name.Name, Aggregate: agg})
 		}

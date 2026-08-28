@@ -17,8 +17,8 @@ import (
 // {{.ProjectionNamePascal}}ProjectionWorker builds the {{.ProjectionName}} read model
 // by listening to events from: {{range $i, $a := .AggregateNames}}{{if $i}}, {{end}}{{$a}}{{end}}.
 type {{.ProjectionNamePascal}}ProjectionWorker struct {
-	esClient *eventstore.Client
-	db       *gorm.DB
+	events eventstore.EventRepository
+	db     *gorm.DB
 }
 
 var {{.ProjectionName}}AggregateNames = []string{
@@ -27,8 +27,11 @@ var {{.ProjectionName}}AggregateNames = []string{
 	{{- end}}
 }
 
-func New{{.ProjectionNamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.ProjectionNamePascal}}ProjectionWorker {
-	return &{{.ProjectionNamePascal}}ProjectionWorker{esClient: esClient, db: db}
+// New{{.ProjectionNamePascal}}ProjectionWorker takes the EventRepository rather
+// than the HTTP client, so the worker runs unchanged against the embedded
+// SQLite store (where there is no client) and against a remote ESB server.
+func New{{.ProjectionNamePascal}}ProjectionWorker(events eventstore.EventRepository, db *gorm.DB) *{{.ProjectionNamePascal}}ProjectionWorker {
+	return &{{.ProjectionNamePascal}}ProjectionWorker{events: events, db: db}
 }
 
 func (w *{{.ProjectionNamePascal}}ProjectionWorker) Run(ctx context.Context) {
@@ -38,7 +41,7 @@ func (w *{{.ProjectionNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 		}
 
 		cursor := w.readCursor(ctx)
-		events, err := w.esClient.EventsAll(ctx, {{.ProjectionName}}AggregateNames, uint(cursor), 100)
+		batch, err := w.events.FetchAll(ctx, {{.ProjectionName}}AggregateNames, uint(cursor), 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -48,7 +51,19 @@ func (w *{{.ProjectionNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 			continue
 		}
 
-		for _, e := range events {
+		// FetchAll returns as soon as the stream is drained — the
+		// embedded store does not long-poll — so an idle worker without
+		// this pause would spin a core.
+		if len(batch) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			continue
+		}
+
+		for _, e := range batch {
 			if err := w.applyEvent(ctx, e); err != nil {
 				log.Printf("{{.ProjectionName}} projection: apply %s/%s %d error: %v",
 					e.AggregateName, e.EventName, e.ID, err)
