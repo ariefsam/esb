@@ -16,12 +16,12 @@ import (
 // {{.NamePascal}}ProjectionWorker keeps the {{.NamePascal}} saga read model in
 // sync with the current state.
 type {{.NamePascal}}ProjectionWorker struct {
-	esClient *eventstore.Client
-	db       *gorm.DB
+	events eventstore.EventRepository
+	db     *gorm.DB
 }
 
-func New{{.NamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
-	return &{{.NamePascal}}ProjectionWorker{esClient: esClient, db: db}
+func New{{.NamePascal}}ProjectionWorker(events eventstore.EventRepository, db *gorm.DB) *{{.NamePascal}}ProjectionWorker {
+	return &{{.NamePascal}}ProjectionWorker{events: events, db: db}
 }
 
 func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
@@ -30,7 +30,7 @@ func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
 			return
 		}
 		cursor := w.readCursor(ctx)
-		events, err := w.esClient.EventsAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
+		batch, err := w.events.FetchAll(ctx, []string{"{{.NameKebab}}"}, uint(cursor), 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -39,7 +39,19 @@ func (w *{{.NamePascal}}ProjectionWorker) Run(ctx context.Context) {
 			time.Sleep(3 * time.Second)
 			continue
 		}
-		for _, e := range events {
+		// FetchAll returns as soon as the stream is drained — the
+		// embedded store does not long-poll — so an idle worker without
+		// this pause would spin a core.
+		if len(batch) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			continue
+		}
+
+		for _, e := range batch {
 			if err := w.applyEvent(ctx, e); err != nil {
 				log.Printf("{{.Name}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
 			}

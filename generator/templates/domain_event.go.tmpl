@@ -14,6 +14,12 @@ type Snapshot = eventstore.Snapshot
 type Lock = eventstore.Lock
 type Locker = eventstore.Locker
 
+// ErrConflict is returned by EventRepository.StoreAtomic when the
+// aggregate moved on since it was loaded. It aliases the event store's
+// sentinel instead of declaring a second one, so errors.Is against it
+// actually matches what the store returns.
+var ErrConflict = eventstore.ErrConflict
+
 // ErrSnapshotNotFound is returned by EventRepository.LatestSnapshot
 // when an aggregate instance has no stored snapshot yet.
 var ErrSnapshotNotFound = eventstore.ErrSnapshotNotFound

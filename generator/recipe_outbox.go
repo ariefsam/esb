@@ -60,7 +60,7 @@ func AddOutbox(name string) error {
 	}
 
 	// Wire both background workers into App + main.go.
-	if err := wireBackgroundWorker(tx, pascal+"OutboxWorker", "projection.New"+pascal+"OutboxWorker(esClient, db)", &actions); err != nil {
+	if err := wireBackgroundWorker(tx, pascal+"OutboxWorker", "projection.New"+pascal+"OutboxWorker(eventRepo, db)", &actions); err != nil {
 		return err
 	}
 	if err := wireBackgroundWorker(tx, pascal+"OutboxPublisher", "projection.New"+pascal+"OutboxPublisher(db, projection."+pascal+"LogPublisher{})", &actions); err != nil {

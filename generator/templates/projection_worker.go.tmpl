@@ -14,14 +14,17 @@ import (
 )
 
 // {{.AggregateNamePascal}}ProjectionWorker keeps the {{.AggregateNamePascal}} read model up to date
-// by long-polling the event store and applying events transactionally.
+// by polling the event store and applying events transactionally.
 type {{.AggregateNamePascal}}ProjectionWorker struct {
-	esClient *eventstore.Client
-	db       *gorm.DB
+	events eventstore.EventRepository
+	db     *gorm.DB
 }
 
-func New{{.AggregateNamePascal}}ProjectionWorker(esClient *eventstore.Client, db *gorm.DB) *{{.AggregateNamePascal}}ProjectionWorker {
-	return &{{.AggregateNamePascal}}ProjectionWorker{esClient: esClient, db: db}
+// New{{.AggregateNamePascal}}ProjectionWorker takes the EventRepository rather
+// than the HTTP client, so the worker runs unchanged against the embedded
+// SQLite store (where there is no client) and against a remote ESB server.
+func New{{.AggregateNamePascal}}ProjectionWorker(events eventstore.EventRepository, db *gorm.DB) *{{.AggregateNamePascal}}ProjectionWorker {
+	return &{{.AggregateNamePascal}}ProjectionWorker{events: events, db: db}
 }
 
 func (w *{{.AggregateNamePascal}}ProjectionWorker) Run(ctx context.Context) {
@@ -31,7 +34,7 @@ func (w *{{.AggregateNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 		}
 
 		cursor := w.readCursor(ctx)
-		events, err := w.esClient.EventsAll(ctx, []string{"{{.AggregateNameKebab}}"}, uint(cursor), 100)
+		batch, err := w.events.FetchAll(ctx, []string{"{{.AggregateNameKebab}}"}, uint(cursor), 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -41,7 +44,19 @@ func (w *{{.AggregateNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 			continue
 		}
 
-		for _, e := range events {
+		// FetchAll returns as soon as the stream is drained — the
+		// embedded store does not long-poll — so an idle worker without
+		// this pause would spin a core.
+		if len(batch) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			continue
+		}
+
+		for _, e := range batch {
 			if err := w.applyEvent(ctx, e); err != nil {
 				log.Printf("{{.AggregateName}} projection: apply %s %d error: %v", e.EventName, e.ID, err)
 			}
