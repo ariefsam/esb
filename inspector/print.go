@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ariefsam/esb/eventstore"
 	"github.com/ariefsam/esb/naming"
 )
 
@@ -372,6 +373,86 @@ func printWire(w io.Writer, m ProjectModel, focus string) {
 			fmt.Fprintln(w)
 		}
 	}
+}
+
+// PrintStorageDetail renders the CLI equivalent of the 'esb ui' /storage
+// page: mode, DSN/ESB URL, per-aggregate event and snapshot counts, held
+// locks, and the last recorded migration. It is the detail view behind
+// `esb show storage` — printStorage (embedded in the full `esb show`
+// output above) stays a one-line summary on purpose so that command keeps
+// its single-screen budget.
+func PrintStorageDetail(w io.Writer, rootDir string) error {
+	info := ScanStorage(rootDir)
+
+	var buf strings.Builder
+	fmt.Fprintln(&buf, "Storage")
+	fmt.Fprintln(&buf, strings.Repeat("=", 78))
+	fmt.Fprintf(&buf, "mode:      %s\n", storageModeDetailLabel(info.Mode))
+	switch info.Mode {
+	case StorageModeESBServer:
+		fmt.Fprintf(&buf, "esb url:   %s\n", fallback(info.ESBURL, "(belum di-set)"))
+	default:
+		fmt.Fprintf(&buf, "dsn:       %s\n", fallback(info.DSN, "(belum di-set)"))
+		if info.DSN != "" && !info.HasSQLite {
+			fmt.Fprintln(&buf, "           (file belum ada)")
+		}
+	}
+	fmt.Fprintf(&buf, "events:    %d total across %d aggregates\n", info.TotalEvents(), len(info.Counts))
+	fmt.Fprintf(&buf, "snapshots: %d total\n", info.TotalSnapshots())
+	fmt.Fprintf(&buf, "locks:     %d held (%d total)\n", info.HeldLockCount(), len(info.Locks))
+	fmt.Fprintln(&buf)
+
+	fmt.Fprintln(&buf, "Per aggregate")
+	fmt.Fprintln(&buf, strings.Repeat("-", 78))
+	names := info.SortedAggregateNames()
+	if len(names) == 0 {
+		fmt.Fprintln(&buf, "  (tidak ada data — mode esb-server atau file SQLite belum ada)")
+	} else {
+		for _, name := range names {
+			fmt.Fprintf(&buf, "  %-28s %6d events   %6d snapshots\n", name, info.Counts[name], info.SnapshotCounts[name])
+		}
+	}
+	fmt.Fprintln(&buf)
+
+	fmt.Fprintln(&buf, "Locks")
+	fmt.Fprintln(&buf, strings.Repeat("-", 78))
+	if len(info.Locks) == 0 {
+		fmt.Fprintln(&buf, "  (tidak ada)")
+	} else {
+		for _, l := range info.Locks {
+			status := "expired"
+			if l.Held {
+				status = "held"
+			}
+			fmt.Fprintf(&buf, "  %-28s owner=%-16s expires=%s  [%s]\n",
+				l.Key, l.OwnerToken, l.ExpiresAt.Local().Format("2006-01-02 15:04:05"), status)
+		}
+	}
+	fmt.Fprintln(&buf)
+
+	fmt.Fprintln(&buf, "Last migration")
+	fmt.Fprintln(&buf, strings.Repeat("-", 78))
+	state, _ := eventstore.ReadMigrationState(info.DSN)
+	if state == "" {
+		fmt.Fprintln(&buf, "  (belum pernah migrate)")
+	} else {
+		fmt.Fprintf(&buf, "  direction: %s\n  events:    %d\n",
+			eventstore.MigrationDirection(state), eventstore.MigrationEventCount(state))
+	}
+	fmt.Fprintln(&buf)
+
+	_, err := io.WriteString(w, buf.String())
+	return err
+}
+
+// storageModeDetailLabel renders the mode line for PrintStorageDetail. An
+// unrecognised EVENT_STORE_MODE surfaces as a warning here too — same rule
+// as the /storage page — instead of being silently treated as embedded.
+func storageModeDetailLabel(mode string) string {
+	if mode == StorageModeUnknown {
+		return mode + " (tidak dikenal — cek EVENT_STORE_MODE di .env)"
+	}
+	return mode
 }
 
 func isFocusedServiceNode(node WireNode, focus string) bool {
