@@ -19,7 +19,11 @@ sync separately for queries.
   store; `client.go` is the HTTP client for a remote ESB server.
 - `repository/` — adapters implementing `domain.EventRepository` over
   whichever event store is active (`local_adapter.go` / `eventstore_adapter.go`).
-- `projection/` — read-model DB (GORM), migrations, and query helpers.
+- `projection/` — read-model DB (GORM, pure-Go SQLite — builds with
+  `CGO_ENABLED=0`), migrations, and query helpers. A worker only advances its
+  cursor inside a successful `applyEvent` transaction and retries a failing
+  event instead of skipping it, so `applyEvent` must return errors, never
+  swallow them.
 - `server/` — HTTP routes/handlers.
 - `wire/` — manual dependency injection; `wire.go` builds the `App` and picks
   the event store implementation based on `EVENT_STORE_MODE`.
@@ -76,7 +80,9 @@ Set via `EVENT_STORE_MODE` in `.env`:
 - `esb-server` — remote HTTP event store; requires `ESB_URL` and a signing
   key from `make keygen`.
 
-`make migrate-to-esb` moves events from embedded to a remote server.
+`make migrate-to-esb` moves events from embedded to a remote server (runs the
+`esb` CLI with values from `.env`; afterwards set `EVENT_STORE_MODE=esb-server`
+by hand). `make migrate-to-embedded` refuses a non-empty target unless `FORCE=1`.
 
 ## Extending this project
 

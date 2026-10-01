@@ -1,6 +1,6 @@
 # esb — Event Sourcing Boilerplate
 
-CLI tool untuk scaffolding proyek Go berbasis [Event Sourcing Builder](https://github.com/ariefsam/event-sourcing-builder). Satu command menghasilkan struktur lengkap yang sudah bisa di-compile: domain aggregate, service, projection worker, repository adapter, dan dependency injection via Google Wire.
+CLI tool untuk scaffolding proyek Go berbasis [Event Sourcing Builder](https://github.com/ariefsam/event-sourcing-builder). Satu command menghasilkan struktur lengkap yang sudah bisa di-compile: domain aggregate, service, projection worker, repository adapter, dan dependency injection manual di `wire/wire.go` (tanpa code generator tambahan). Proyek hasil generate memakai SQLite pure-Go, jadi bisa di-build dengan `CGO_ENABLED=0`.
 
 ---
 
@@ -8,9 +8,11 @@ CLI tool untuk scaffolding proyek Go berbasis [Event Sourcing Builder](https://g
 
 ```bash
 go install github.com/ariefsam/esb@latest
+# atau versi tertentu (setelah ada tag rilis): go install github.com/ariefsam/esb@v0.1.0
 ```
 
-Pastikan `$(go env GOPATH)/bin` ada di `PATH`.
+Pastikan `$(go env GOPATH)/bin` ada di `PATH`. Binary siap pakai (Linux,
+macOS, Windows) juga dilampirkan di halaman GitHub Releases untuk setiap tag.
 
 ---
 
@@ -36,8 +38,7 @@ esb add event order OrderCancelled reason:string
 # 5. Tambah HTTP handler
 esb add handler place_order --aggregate order
 
-# 6. Generate wire dan jalankan (mode embedded, tidak butuh server ESB)
-make wire
+# 6. Jalankan (mode embedded, tidak butuh server ESB)
 make run
 ```
 
@@ -77,21 +78,26 @@ toko-online/
 ├── AGENTS.md
 ├── domain/
 │   ├── event.go
-│   └── errors.go
+│   ├── errors.go
+│   └── upcast.go        # registry upcaster (no-op sampai ada upcaster pertama)
 ├── eventstore/
 │   ├── client.go        # HTTP client (dipakai saat mode esb-server)
-│   └── local_store.go   # SQLite-backed EventRepository (dipakai saat mode embedded)
+│   ├── local_store.go   # SQLite-backed EventRepository (dipakai saat mode embedded)
+│   └── fake_store.go    # EventRepository in-memory untuk test
+├── testkit/
+│   └── testkit.go       # helper Given-When-Then
 ├── repository/
 │   ├── eventstore_adapter.go  # adapter untuk HTTP client
 │   └── local_adapter.go       # adapter untuk local_store (mode embedded)
 ├── projection/
-│   ├── db.go
-│   └── query.go
+│   ├── worker.go        # interface Worker
+│   ├── db.go            # buka SQLite (pure-Go) + AutoMigrate
+│   ├── query.go
+│   └── repository.go
 ├── server/
 │   └── routes.go
 └── wire/
-    ├── wire.go
-    └── providers.go
+    └── wire.go          # dependency injection manual: NewApp() merakit semua komponen
 ```
 
 Setelah `init`, salin `.env.example` ke `.env`. Nilai default membuat aplikasi jalan dalam **mode embedded** (SQLite lokal, tanpa server ESB):
@@ -118,7 +124,9 @@ Saat `EVENT_STORE_MODE=esb-server` kamu juga butuh ECDSA key pair untuk JWT sign
 
 ```bash
 make keygen
-# menghasilkan private.pem dan mencetak PUBLIC_KEY untuk di-paste ke .env ESB server
+# menghasilkan private.pem (permission 0600) dan mencetak PUBLIC_KEY untuk
+# di-paste ke .env ESB server. Menolak menimpa private.pem yang sudah ada —
+# hapus manual kalau memang mau rotasi kunci.
 ```
 
 ---
@@ -146,7 +154,8 @@ Yang dihasilkan:
 Yang diupdate otomatis:
 
 - `projection/db.go` — tambah model ke `AutoMigrate()`
-- `wire/providers.go` — tambah provider stub
+- `wire/wire.go` — konstruksi projection worker di `NewApp()` + field di `App`
+- `main.go` — worker didaftarkan ke daftar worker yang dijalankan
 
 Contoh output `domain/order.go`:
 
@@ -193,7 +202,7 @@ func (o *Order) Exists() bool { return o.Version > 0 }
 
 ### `esb add event <aggregate> <EventName> [field:type ...]`
 
-Tambah event type ke aggregate yang sudah ada. `EventName` menggunakan `PascalCase`. Field bertipe Go primitive: `string`, `int64`, `float64`, `bool`.
+Tambah event type ke aggregate yang sudah ada. `EventName` menggunakan `PascalCase`. Field bertipe Go primitive: `string`, `int64`, `float64`, `bool`. Nama field ditolak kalau bentrok dengan keyword Go (mis. `type`, `range` — pakai `type_name`) atau terduplikasi.
 
 ```bash
 esb add event order OrderPlaced amount:int64 currency:string buyer_id:string
@@ -266,8 +275,11 @@ esb add handler user_auth --aggregate user
 Yang dihasilkan:
 
 - `server/handler/<name>.go` — struct handler + satu method HTTP skeleton
-- Update `server/routes.go` — tambah route dengan `// TODO` comment
-- Update `wire/providers.go` — tambah provider stub
+- Update `wire/wire.go` — konstruksi `<Aggregate>Service` (sekali per aggregate) dan handler di `NewApp()`
+- Update `server/routes.go` — tambah **hint** route berupa komentar `// TODO: router.HandleFunc(...)`.
+  Hint ini belum bisa langsung di-uncomment (`RegisterRoutes` tidak menerima
+  `app`) — daftarkan route secara manual, mis. di `wire/wire.go` setelah
+  `server.RegisterRoutes(router)`.
 
 ---
 
@@ -300,6 +312,11 @@ scenario test Given-When-Then. Semua ditulis dalam satu transaksi yang
 atomik: kalau ada bagian gagal, tidak ada file yang ditulis.
 
 Tersedia juga dari web UI (`esb ui`).
+
+Handler HTTP recipe berbagi `server/handler/response.go`: body JSON dibatasi
+1 MiB (`maxBodyBytes`, balas **413** kalau lebih), error 4xx mengembalikan
+pesan aslinya, sedangkan error 5xx hanya di-log di server — client menerima
+`"Internal Server Error"` tanpa detail internal (SQL, path, dsb).
 
 #### `esb add recipe crud <name> [field:type ...]`
 
@@ -498,6 +515,30 @@ Wire Graph
   |     handler.NewPlaceOrderHandler(...)
 ```
 
+### `esb show storage`
+
+Detail event store proyek: mode, DSN/ESB URL, jumlah event & snapshot per
+aggregate, lock yang sedang dipegang, dan migrasi terakhir. Versi CLI dari
+halaman `/storage` di `esb ui`.
+
+```bash
+esb show storage
+```
+
+---
+
+### `esb migrate to-esb | to-embedded`
+
+Pindahkan event antara SQLite lokal (mode embedded) dan server ESB remote.
+Lihat [Migrasi ke ESB Server](#migrasi-ke-esb-server).
+
+---
+
+### `esb version`
+
+Cetak versi `esb` (dari `-ldflags` saat rilis, atau versi modul dari
+`go install ...@<versi>`). Sertakan output ini di bug report.
+
 ---
 
 ### `esb ui`
@@ -533,6 +574,7 @@ event store tidak disentuh.
 | `GET`  | `/commands` | katalog command + form (dikelompokkan: Scaffold / Recipes / Evolusi / Proyek) |
 | `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
 | `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |
+| `GET`  | `/flow` | graf alur write→read (handler → command → event → projection worker → query) dari analisis AST; edge worker→query ditandai inferensi (garis putus-putus) |
 | `GET`  | `/storage` | mode event store, event/snapshot count per aggregate, isi tabel locks (embedded) |
 | `GET`, `POST` | `/storage/migrate` | form + eksekusi migrasi embedded ↔ esb-server |
 | `GET`  | `/static/*` | CSS dan helper JS (embedded di binary, offline) |
@@ -554,7 +596,17 @@ divalidasi sebelum diterjemahkan ke argv.
 | `add-projection` | `esb add projection <name> --aggregates <a,b,...>` |
 | `add-handler` | `esb add handler <name> --aggregate <aggregate>` |
 | `add-query` | `esb add query <name> --aggregate <aggregate>` |
+| `add-recipe-crud` | `esb add recipe crud <name> [field:type ...]` |
+| `add-recipe-ledger` | `esb add recipe ledger <name>` |
+| `add-recipe-statemachine` | `esb add recipe statemachine <name> --states <a,b,...> [--transitions <a->b,...>]` |
+| `add-recipe-saga` | `esb add recipe saga <name>` |
+| `add-recipe-outbox` | `esb add recipe outbox <name>` |
+| `add-upcaster` | `esb add upcaster <aggregate> <EventName>` |
+| `add-idempotency` | `esb add idempotency` |
+| `delete-event` | `esb delete event <aggregate> <EventName>` |
 | `show` | `esb show [aggregate]` |
+| `migrate-to-esb` | `esb migrate to-esb --source <path> --esb-url <url> --tenant <id> --project <id>` |
+| `migrate-to-embedded` | `esb migrate to-embedded --source <path> --esb-url <url> --tenant <id> --project <id> [--force]` |
 
 Karakter non-`[A-Za-z0-9_-]` (dan `:,.,` pada field event) ditolak
 oleh validator — sehingga input seperti `order;touch /tmp/pwned`
@@ -676,17 +728,27 @@ func TestOrderService_PlaceOrder_RejectsDuplicate(t *testing.T) {
 
 ### Projection Cursor
 
-Projection worker melacak posisi terakhir yang diproses. Saat restart, ia lanjut dari posisi terakhir — tidak ada event yang dilewati atau diproses dua kali:
+Projection worker melacak posisi terakhir yang diproses. Cursor hanya maju di dalam transaksi yang sama dengan update read model, jadi saat restart worker lanjut dari posisi terakhir — tidak ada event yang dilewati atau diproses dua kali:
 
 ```go
 func (w *OrderProjectionWorker) Run(ctx context.Context) {
     for {
-        cursor := w.readCursor(ctx)
-        events, err := w.esClient.EventsAll(ctx, []string{"order"}, uint(cursor), 100)
-        // proses events, update cursor dalam satu transaksi
+        cursor, err := w.readCursor(ctx) // error DB → retry, bukan mulai dari 0
+        batch, err := w.events.FetchAll(ctx, []string{"order"}, uint(cursor), 100)
+        for _, e := range batch {
+            if err := w.applyEvent(ctx, e); err != nil {
+                // log, tunggu 3 detik, lalu fetch ulang dari cursor:
+                // event yang gagal di-retry, tidak dilewati.
+                break
+            }
+        }
     }
 }
 ```
+
+Event yang **selalu** gagal di-apply akan menahan worker tersebut (terlihat di
+log tiap 3 detik) — disengaja, supaya read model tidak bolong diam-diam.
+Perbaiki kode projection-nya atau tambah upcaster.
 
 ### Projection Multi-Aggregate
 
@@ -759,6 +821,40 @@ Client library menandatangani dan memperbarui token secara otomatis — tidak pe
 
 ---
 
+## Migrasi ke ESB Server
+
+Mulai di mode embedded, pindah ke server ESB saat siap production:
+
+```bash
+# 1. Buat key pair dan pasang PUBLIC_KEY di server ESB (lihat di atas)
+make keygen
+
+# 2. Isi ESB_URL, TENANT_ID, PROJECT_ID di .env
+
+# 3. Salin event dari SQLite lokal ke server — dijalankan oleh CLI esb
+make migrate-to-esb
+#    setara: esb migrate to-esb --source <EVENT_STORE_DSN|DB_DSN> \
+#              --esb-url <ESB_URL> --tenant <TENANT_ID> --project <PROJECT_ID>
+
+# 4. Ubah EVENT_STORE_MODE=esb-server di .env, lalu restart aplikasi
+```
+
+- Event dikirim per batch (100) dengan semantik `expected_version`: riwayat
+  remote dibandingkan dulu, event yang sudah sama dilewati dan hanya sisa yang
+  belum ada yang dikirim; riwayat yang berbeda atau hanya ada di remote
+  membatalkan migrasi. Aman dijalankan ulang.
+- Hasil terakhir dicatat di `<dsn>.migration_state` dan tampil di
+  `esb show storage` / halaman `/storage` `esb ui`. `esb migrate` **tidak**
+  mengubah `.env` — langkah 4 manual.
+- Balik ke lokal: `make migrate-to-embedded`. esb menolak kalau SQLite target
+  sudah berisi event; tambahkan `FORCE=1` kalau memang disengaja.
+- Target `make` membaca `.env` (format `KEY=VALUE` sederhana, tanpa tanda
+  kutip). Override per-run: `make migrate-to-esb ESB_URL=https://...`; pakai
+  binary lain: `make migrate-to-esb ESB=/path/ke/esb`.
+- Dari browser: halaman `/storage/migrate` di `esb ui`.
+
+---
+
 ## Injection Points
 
 `esb` menggunakan marker comment untuk mengetahui di mana harus menginjeksi kode ke file yang sudah ada. Jangan hapus marker ini:
@@ -766,22 +862,16 @@ Client library menandatangani dan memperbarui token secara otomatis — tidak pe
 | Marker | Lokasi | Digunakan oleh |
 |--------|--------|----------------|
 | `// esb:inject:apply-cases` | `domain/<agg>.go` dalam `Apply()` | `add event` |
-| `// esb:inject:automigrate-models` | `projection/db.go` | `add aggregate`, `add projection` |
-| `// esb:inject:wire-providers` | `wire/providers.go` | `add aggregate`, `add projection`, `add handler` |
-| `// esb:inject:routes` | `server/routes.go` | `add handler` |
+| `// esb:inject:applyevent-cases` | `projection/<agg>_worker.go` | `add event` |
+| `// esb:inject:automigrate-models` | `projection/db.go` | `add aggregate`, `add projection`, recipe |
+| `// esb:inject:app-fields`, `app-services`, `app-init`, `app-return-fields` | `wire/wire.go` | `add aggregate`, `add projection`, `add handler`, recipe |
+| `// esb:inject:projection-workers` | `main.go` | `add aggregate`, `add projection`, recipe |
+| `// esb:inject:routes` | `server/routes.go` | `add handler`, recipe crud (hint route) |
 
-Jika marker tidak ditemukan (file diedit manual), `esb` akan print kode yang perlu ditambahkan secara manual.
-
----
-
-## Dry Run
-
-Gunakan flag `--dry-run` untuk melihat apa yang akan di-generate tanpa menulis ke disk:
-
-```bash
-esb add aggregate invoice --dry-run
-esb add event order OrderShipped tracking_number:string --dry-run
-```
+Setiap `esb add ...` bersifat transaksional: kalau marker tidak ditemukan (file
+diedit manual) atau hasilnya bukan Go yang valid, command gagal dengan pesan
+error (mis. `projection/db.go: marker "// esb:inject:automigrate-models" not found`)
+dan **tidak ada file yang ditulis**. Kembalikan marker-nya lalu jalankan ulang.
 
 ---
 
@@ -821,9 +911,22 @@ esb add query orders_by_status --aggregate order
 # Projection multi-aggregate: laporan penjualan gabungan order + product
 esb add projection sales_report --aggregates order,product
 
-# Generate wire, build, run
-make wire
+# Build dan jalankan
 make run
+```
+
+---
+
+## Rilis (maintainer)
+
+Versi mengikuti semver lewat git tag. Push tag `vX.Y.Z` memicu
+`.github/workflows/release.yml`: test, build binary 5 platform dengan versi
+tertanam (`esb version`), `checksums.txt`, lalu GitHub Release dengan catatan
+otomatis.
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
 ```
 
 ---
