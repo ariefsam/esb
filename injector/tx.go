@@ -1,8 +1,10 @@
 package injector
 
 import (
+	"errors"
 	"fmt"
 	"go/format"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,11 +114,14 @@ func (t *Tx) EnsureImport(path, importPath string) error {
 // Commit writes every staged change to disk. It first validates that all
 // staged Go files gofmt cleanly; if any does not, nothing is written and the
 // offending file's parse error is returned. Individual writes use a
-// write-to-temp-then-rename so a file is never observed half-written.
+// write-to-temp-then-rename so a file is never observed half-written, and if
+// a write fails midway the files already written are restored (or removed,
+// if they were new) so the step stays all-or-nothing on disk too.
 func (t *Tx) Commit() error {
 	type pending struct {
 		path string
 		out  []byte
+		orig original
 	}
 	var writes []pending
 
@@ -133,20 +138,76 @@ func (t *Tx) Commit() error {
 			}
 			out = formatted
 		}
-		writes = append(writes, pending{path: path, out: out})
+		orig, err := snapshot(path)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, pending{path: path, out: out, orig: orig})
 	}
 
-	for _, w := range writes {
-		if err := atomicWrite(w.path, w.out); err != nil {
+	for i, w := range writes {
+		if err := atomicWrite(w.path, w.out, w.orig.mode()); err != nil {
+			var rollbackErrs []error
+			for _, done := range writes[:i] {
+				if rbErr := done.orig.restore(done.path); rbErr != nil {
+					rollbackErrs = append(rollbackErrs, rbErr)
+				}
+			}
+			if len(rollbackErrs) > 0 {
+				return fmt.Errorf("%w (rollback failed, project may be partially written: %v)", err, errors.Join(rollbackErrs...))
+			}
 			return err
 		}
 	}
 	return nil
 }
 
+// original is a file's on-disk state before Commit touched it.
+type original struct {
+	existed bool
+	data    []byte
+	perm    fs.FileMode
+}
+
+func snapshot(path string) (original, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return original{}, nil
+	}
+	if err != nil {
+		return original{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return original{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return original{existed: true, data: data, perm: info.Mode().Perm()}, nil
+}
+
+// mode is the permission the rewritten file should keep: its existing mode,
+// or 0644 for a new file.
+func (o original) mode() fs.FileMode {
+	if o.existed {
+		return o.perm
+	}
+	return 0644
+}
+
+// restore puts path back the way snapshot found it.
+func (o original) restore(path string) error {
+	if !o.existed {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		return nil
+	}
+	return atomicWrite(path, o.data, o.perm)
+}
+
 // atomicWrite writes data to a sibling temp file then renames it over path so
-// readers never see a partial file. Directories are created as needed.
-func atomicWrite(path string, data []byte) error {
+// readers never see a partial file. Directories are created as needed. The
+// temp file is created 0600, so perm is applied before the rename.
+func atomicWrite(path string, data []byte, perm fs.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
@@ -160,6 +221,10 @@ func atomicWrite(path string, data []byte) error {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write temp for %s: %w", path, err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp for %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp for %s: %w", path, err)
