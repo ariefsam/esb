@@ -820,6 +820,10 @@ func (ExecRunner) Run(ctx context.Context, projectRoot string, argv []string, st
 	cmd.Env = os.Environ()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// After ctx cancels and the child is killed, stop waiting for its
+	// output pipes after 5s — a grandchild (e.g. go mod tidy) that
+	// inherited them would otherwise keep Run, and shutdown, blocked.
+	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return 0, ErrTimeout
@@ -854,6 +858,7 @@ type RunStore struct {
 	runs   map[string]*Run
 	nextID uint64
 	active bool
+	wg     sync.WaitGroup // in-flight execute goroutines
 }
 
 // NewRunStore returns an empty RunStore.
@@ -941,8 +946,13 @@ func (s *RunStore) Start(parent context.Context, projectRoot, commandID string, 
 	s.runs[run.ID] = run
 	s.mu.Unlock()
 
-	go s.execute(parent, run, runner)
+	s.wg.Go(func() { s.execute(parent, run, runner) })
 	return run, nil
+}
+
+// Wait blocks until every started run has finished and been recorded.
+func (s *RunStore) Wait() {
+	s.wg.Wait()
 }
 
 // evictOldestCompletedLocked removes the oldest run whose status is no
@@ -994,6 +1004,9 @@ func (s *RunStore) execute(parent context.Context, run *Run, runner ProcessRunne
 	run.Stderr = errOut.String()
 	run.ExitCode = exitCode
 	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		run.Status = RunFailed
+		run.Err = "cancelled: esb ui is shutting down"
 	case errors.Is(err, ErrTimeout), errors.Is(ctx.Err(), context.DeadlineExceeded):
 		run.Status = RunTimedOut
 		run.Err = "command exceeded timeout"

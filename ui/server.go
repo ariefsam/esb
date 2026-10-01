@@ -21,6 +21,10 @@ type Server struct {
 	runner      ProcessRunner
 	templates   *template.Template
 	staticFS    fs.FS
+
+	// runCtx parents every background command run; Close cancels it.
+	runCtx     context.Context
+	cancelRuns context.CancelFunc
 }
 
 // Options configure a Server. ProjectRoot is required and is the
@@ -51,13 +55,24 @@ func NewServer(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("sub static: %w", err)
 	}
 
+	runCtx, cancelRuns := context.WithCancel(context.Background())
 	return &Server{
 		projectRoot: opts.ProjectRoot,
 		runs:        NewRunStore(),
 		runner:      opts.Runner,
 		templates:   tmpl,
 		staticFS:    sub,
+		runCtx:      runCtx,
+		cancelRuns:  cancelRuns,
 	}, nil
+}
+
+// Close cancels any command still running (the child process is killed)
+// and waits until its run is recorded. Call it after the HTTP server has
+// shut down so no new run can start.
+func (s *Server) Close() {
+	s.cancelRuns()
+	s.runs.Wait()
 }
 
 // ProjectRoot returns the directory the UI is serving.
@@ -154,10 +169,10 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 
 // runContext is used as the parent for every background command run.
 // It is independent of the HTTP request that started the run so the
-// child process survives the request lifecycle — only server shutdown
-// or the run timeout cancels it.
+// child process survives the request lifecycle — only Close (server
+// shutdown) or the run timeout cancels it.
 func (s *Server) runContext() context.Context {
-	return context.Background()
+	return s.runCtx
 }
 
 // notFound writes the shared 404 page so handlers don't repeat the

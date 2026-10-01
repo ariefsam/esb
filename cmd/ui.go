@@ -51,6 +51,9 @@ Examples:
 		if err != nil {
 			return err
 		}
+		// Runs after httpSrv.Shutdown on every return path: kill a command
+		// still in flight instead of leaving it running after esb ui exits.
+		defer srv.Close()
 
 		ln, err := net.Listen("tcp", uiAddr)
 		if err != nil {

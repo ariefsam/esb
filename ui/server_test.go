@@ -159,9 +159,9 @@ func TestServer_CommandsPage(t *testing.T) {
 	// Recipes must be surfaced as their own section, with the section intro
 	// and per-recipe "what it generates" explanation.
 	for _, want := range []string{
-		"Recipes — pola event-sourcing lengkap",   // group heading
-		"dalam satu langkah atomik",                // group intro
-		"Add CRUD recipe",                          // a recipe label
+		"Recipes — pola event-sourcing lengkap",      // group heading
+		"dalam satu langkah atomik",                  // group intro
+		"Add CRUD recipe",                            // a recipe label
 		"Create / Update / Archive dengan invariant", // a recipe detail bullet
 	} {
 		if !strings.Contains(body, want) {

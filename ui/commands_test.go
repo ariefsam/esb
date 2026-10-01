@@ -167,18 +167,18 @@ func TestBuildArgv_RejectsInvalidNames(t *testing.T) {
 		{"add-projection", FormInput{"name": {"x"}, "aggregates": {"bad name"}}},
 		{"add-handler", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
 		{"add-query", FormInput{"name": {"x"}, "aggregate": {"bad name"}}},
-		{"add-recipe-crud", FormInput{"name": {"Product"}}},                                  // not snake_case
-		{"add-recipe-crud", FormInput{"name": {"product;rm -rf /"}}},                         // shell metachar
-		{"add-recipe-crud", FormInput{"name": {"product"}, "fields": {"price;evil"}}},        // bad field
-		{"add-recipe-ledger", FormInput{"name": {"Account"}}},                                // not snake_case
-		{"add-recipe-ledger", FormInput{"name": {"account;rm -rf /"}}},                       // shell metachar
-		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {}}},              // no states
-		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"Placed"}}},      // state not snake
+		{"add-recipe-crud", FormInput{"name": {"Product"}}},                                                             // not snake_case
+		{"add-recipe-crud", FormInput{"name": {"product;rm -rf /"}}},                                                    // shell metachar
+		{"add-recipe-crud", FormInput{"name": {"product"}, "fields": {"price;evil"}}},                                   // bad field
+		{"add-recipe-ledger", FormInput{"name": {"Account"}}},                                                           // not snake_case
+		{"add-recipe-ledger", FormInput{"name": {"account;rm -rf /"}}},                                                  // shell metachar
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {}}},                                         // no states
+		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"Placed"}}},                                 // state not snake
 		{"add-recipe-statemachine", FormInput{"name": {"order"}, "states": {"placed"}, "transitions": {"placed;paid"}}}, // bad transition
-		{"add-recipe-saga", FormInput{"name": {"Money"}}},          // not snake_case
-		{"add-recipe-saga", FormInput{"name": {"money;rm -rf /"}}}, // shell metachar
-		{"add-upcaster", FormInput{"aggregate": {"order"}, "event": {"orderPlaced"}}},   // event not PascalCase
-		{"add-upcaster", FormInput{"aggregate": {"order"}, "event": {"Order;evil"}}},    // shell metachar
+		{"add-recipe-saga", FormInput{"name": {"Money"}}},                                                               // not snake_case
+		{"add-recipe-saga", FormInput{"name": {"money;rm -rf /"}}},                                                      // shell metachar
+		{"add-upcaster", FormInput{"aggregate": {"order"}, "event": {"orderPlaced"}}},                                   // event not PascalCase
+		{"add-upcaster", FormInput{"aggregate": {"order"}, "event": {"Order;evil"}}},                                    // shell metachar
 		{"show", FormInput{"aggregate": {"bad name"}}},
 	}
 	for _, tc := range cases {
