@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -40,14 +41,26 @@ func (w *{{.ProjectionNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 			return
 		}
 
-		cursor := w.readCursor(ctx)
+		cursor, err := w.readCursor(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("{{.ProjectionName}} projection: read cursor error: %v — retrying in 3s", err)
+			if !w.wait(ctx, 3*time.Second) {
+				return
+			}
+			continue
+		}
 		batch, err := w.events.FetchAll(ctx, {{.ProjectionName}}AggregateNames, uint(cursor), 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			log.Printf("{{.ProjectionName}} projection: fetch error: %v — retrying in 3s", err)
-			time.Sleep(3 * time.Second)
+			if !w.wait(ctx, 3*time.Second) {
+				return
+			}
 			continue
 		}
 
@@ -65,17 +78,45 @@ func (w *{{.ProjectionNamePascal}}ProjectionWorker) Run(ctx context.Context) {
 
 		for _, e := range batch {
 			if err := w.applyEvent(ctx, e); err != nil {
-				log.Printf("{{.ProjectionName}} projection: apply %s/%s %d error: %v",
+				if ctx.Err() != nil {
+					return
+				}
+				// Stop at the first failure and re-fetch from the cursor. The
+				// cursor only advances inside a successful applyEvent, so this
+				// event is retried instead of skipped. An event that keeps
+				// failing blocks the worker (visible in the log) rather than
+				// silently leaving a hole in the read model.
+				log.Printf("{{.ProjectionName}} projection: apply %s/%s %d error: %v — retrying in 3s",
 					e.AggregateName, e.EventName, e.ID, err)
+				if !w.wait(ctx, 3*time.Second) {
+					return
+				}
+				break
 			}
 		}
 	}
 }
 
-func (w *{{.ProjectionNamePascal}}ProjectionWorker) readCursor(ctx context.Context) int64 {
+// readCursor returns the ID of the last applied event. A missing row means
+// nothing has been applied yet (0); any other error is returned so Run
+// retries instead of silently replaying the stream from the start.
+func (w *{{.ProjectionNamePascal}}ProjectionWorker) readCursor(ctx context.Context) (int64, error) {
 	var row ProjectionCursorRow
-	w.db.WithContext(ctx).Where("name = ?", "{{.ProjectionName}}").First(&row)
-	return row.AfterID
+	err := w.db.WithContext(ctx).Where("name = ?", "{{.ProjectionName}}").First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	return row.AfterID, err
+}
+
+// wait pauses for d and reports false if ctx was cancelled first.
+func (w *{{.ProjectionNamePascal}}ProjectionWorker) wait(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 func (w *{{.ProjectionNamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
