@@ -10,11 +10,16 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "esb",
 	Short: "Event Sourcing Boilerplate — scaffold Go projects backed by Event Sourcing Builder",
+	// Execute prints the error once; cobra would otherwise print it too,
+	// followed by the full usage text, burying the actual message.
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if c, err := rootCmd.ExecuteC(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintf(os.Stderr, "Run '%s --help' for usage.\n", c.CommandPath())
 		os.Exit(1)
 	}
 }

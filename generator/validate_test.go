@@ -64,3 +64,26 @@ func TestAdd_RejectsInvalidNamesWithoutPanic(t *testing.T) {
 		t.Error("ParseFields(BadField:int64) = nil, want error")
 	}
 }
+
+func TestParseFields_RejectsKeywordFieldNames(t *testing.T) {
+	for _, name := range []string{"type", "func", "range", "go", "default"} {
+		if _, err := ParseFields([]string{name + ":string"}); err == nil {
+			t.Errorf("ParseFields(%s:string) = nil error, want keyword rejection", name)
+		}
+	}
+	// Multi-segment names never collide: type_id -> typeID.
+	for _, name := range []string{"type_id", "range_start", "string", "bool"} {
+		if _, err := ParseFields([]string{name + ":string"}); err != nil {
+			t.Errorf("ParseFields(%s:string) = %v, want nil", name, err)
+		}
+	}
+}
+
+func TestParseFields_RejectsDuplicateFields(t *testing.T) {
+	if _, err := ParseFields([]string{"amount:int64", "amount:string"}); err == nil {
+		t.Fatal("ParseFields with a repeated field = nil error, want duplicate rejection")
+	}
+	if _, err := ParseFields([]string{"amount:int64", "currency:string"}); err != nil {
+		t.Fatalf("ParseFields with distinct fields = %v, want nil", err)
+	}
+}

@@ -13,20 +13,28 @@ import (
 // ParseFields parses "field:type ..." arguments into FieldDef slices.
 func ParseFields(args []string) ([]FieldDef, error) {
 	var fields []FieldDef
+	seen := map[string]string{} // Go field name -> the arg that produced it
 	for _, arg := range args {
 		parts := strings.SplitN(arg, ":", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid field %q — expected name:type", arg)
 		}
 		fieldName, typ := parts[0], parts[1]
-		if err := validateSnakeName("field name", fieldName); err != nil {
+		if err := validateFieldName(fieldName); err != nil {
 			return nil, err
 		}
 		if !validType(typ) {
 			return nil, fmt.Errorf("unsupported type %q for field %q — use string, int64, float64, or bool", typ, fieldName)
 		}
+		// Two args mapping to one Go field would render a struct that does
+		// not compile ("redeclared") — gofmt cannot catch that at commit.
+		pascal := naming.ToPascalCase(fieldName)
+		if prev, dup := seen[pascal]; dup {
+			return nil, fmt.Errorf("duplicate field %q — %q already defines Go field %s", arg, prev, pascal)
+		}
+		seen[pascal] = arg
 		fields = append(fields, FieldDef{
-			NamePascal: naming.ToPascalCase(fieldName),
+			NamePascal: pascal,
 			JSONTag:    fieldName,
 			Type:       typ,
 		})

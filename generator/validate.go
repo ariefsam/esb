@@ -2,7 +2,10 @@ package generator
 
 import (
 	"fmt"
+	"go/token"
 	"regexp"
+
+	"github.com/ariefsam/esb/naming"
 )
 
 // snakeNameRE matches snake_case identifiers: a lowercase letter followed by
@@ -34,6 +37,19 @@ func validatePascalName(kind, name string) error {
 	}
 	if !pascalNameRE.MatchString(name) {
 		return fmt.Errorf("invalid %s %q — use PascalCase (start with an uppercase letter, letters and digits only), e.g. OrderPlaced", kind, name)
+	}
+	return nil
+}
+
+// validateFieldName checks an event/recipe field name: snake_case, and its
+// generated lower-camel form (used as a constructor parameter) must not be a
+// Go keyword — `type:string` would otherwise fail with a cryptic parse error.
+func validateFieldName(name string) error {
+	if err := validateSnakeName("field name", name); err != nil {
+		return err
+	}
+	if param := lcFirst(naming.ToPascalCase(name)); token.IsKeyword(param) {
+		return fmt.Errorf("invalid field name %q — %q is a Go keyword; use a more specific name, e.g. %s_name", name, param, name)
 	}
 	return nil
 }

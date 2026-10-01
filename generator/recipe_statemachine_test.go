@@ -37,12 +37,12 @@ func TestAddStateMachine_GeneratedProjectBuildsAndTests(t *testing.T) {
 
 func TestBuildStateMachineData_RejectsBadTransitions(t *testing.T) {
 	cases := []struct{ states, transitions string }{
-		{"", ""},                          // no states
-		{"placed,paid", "placed->nope"},   // unknown target
-		{"placed,paid", "nope->paid"},     // unknown source
-		{"placed,paid", "placed_paid"},    // malformed (no ->)
-		{"placed,placed", ""},             // duplicate state
-		{"Placed", ""},                    // not snake_case
+		{"", ""},                        // no states
+		{"placed,paid", "placed->nope"}, // unknown target
+		{"placed,paid", "nope->paid"},   // unknown source
+		{"placed,paid", "placed_paid"},  // malformed (no ->)
+		{"placed,placed", ""},           // duplicate state
+		{"Placed", ""},                  // not snake_case
 	}
 	for _, c := range cases {
 		if _, err := buildStateMachineData("m", "order", c.states, c.transitions); err == nil {
