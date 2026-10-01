@@ -16,20 +16,34 @@ build:
 test:
 	go test ./...
 
+# private.pem dibuat dengan permission 0600 (umask 077) — kunci ini menandatangani
+# JWT ke ESB server. Tidak menimpa kunci yang sudah ada: mengganti kunci memutus
+# akses sampai PUBLIC_KEY baru dipasang di server, jadi hapus manual kalau
+# memang mau rotasi.
 keygen:
-	@openssl ecparam -name prime256v1 -genkey -noout -out private.pem
+	@if [ -f private.pem ]; then echo "private.pem sudah ada — hapus dulu kalau mau rotasi kunci."; exit 1; fi
+	@umask 077 && openssl ecparam -name prime256v1 -genkey -noout -out private.pem
 	@openssl ec -in private.pem -pubout -out public.pem
 	@printf '\nPUBLIC_KEY='
 	@openssl base64 -A -in public.pem
 	@printf '\n\nPaste PUBLIC_KEY into the ESB server PUBLIC_KEYS env var.\n'
 
-# Migrasi event dari SQLite lokal ke server ESB remote.
-# Setelah sukses, .env akan di-update ke EVENT_STORE_MODE=esb-server
-# dan worker harus di-restart manual.
-migrate-to-esb:
-	go run . migrate to-esb --source "$${EVENT_STORE_DSN:-$${DB_DSN:-app.db}}" --esb-url "$$ESB_URL" --tenant "$$TENANT_ID" --project "$$PROJECT_ID"
+# Target migrate dijalankan oleh CLI esb (go install github.com/ariefsam/esb@latest),
+# bukan oleh aplikasi ini, dan membaca konfigurasi dari .env (format KEY=VALUE
+# sederhana, tanpa tanda kutip). Override per-run lewat argumen make, mis.
+# make migrate-to-esb ESB_URL=https://esb.example.com
+ESB ?= esb
+-include .env
+MIGRATE_SOURCE = $(or $(EVENT_STORE_DSN),$(DB_DSN),app.db)
+MIGRATE_FLAGS = --source "$(MIGRATE_SOURCE)" --esb-url "$(ESB_URL)" --tenant "$(TENANT_ID)" --project "$(PROJECT_ID)"
 
-# Migrasi event dari server ESB remote kembali ke SQLite lokal.
-# Butuh --force saat ada data existing di SQLite target.
+# Migrasi event dari SQLite lokal ke server ESB remote. Setelah sukses, ubah
+# EVENT_STORE_MODE=esb-server di .env lalu restart aplikasi.
+migrate-to-esb:
+	$(ESB) migrate to-esb $(MIGRATE_FLAGS)
+
+# Migrasi event dari server ESB remote kembali ke SQLite lokal. esb menolak
+# kalau SQLite target sudah berisi event; tambahkan FORCE=1 kalau memang
+# disengaja: make migrate-to-embedded FORCE=1
 migrate-to-embedded:
-	go run . migrate to-embedded --source "$${EVENT_STORE_DSN:-$${DB_DSN:-app.db}}" --esb-url "$$ESB_URL" --tenant "$$TENANT_ID" --project "$$PROJECT_ID" --force
+	$(ESB) migrate to-embedded $(MIGRATE_FLAGS)$(if $(FORCE), --force)
