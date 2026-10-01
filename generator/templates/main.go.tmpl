@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"{{.ModuleName}}/projection"
 	"{{.ModuleName}}/wire"
@@ -25,20 +28,41 @@ func main() {
 	workers := []projection.Worker{
 		// esb:inject:projection-workers
 	}
+	var wg sync.WaitGroup
 	for _, w := range workers {
-		go w.Run(ctx)
+		wg.Go(func() { w.Run(ctx) })
 	}
 
-	fmt.Printf("Starting {{.PackageName}} on %s\n", app.Env.Addr)
+	// Timeouts bound how long a slow or idle client can hold a connection
+	// (slowloris). Raise WriteTimeout if a handler legitimately streams.
 	srv := &http.Server{
-		Addr:    app.Env.Addr,
-		Handler: app.Handler,
+		Addr:              app.Env.Addr,
+		Handler:           app.Handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+
+	// On SIGINT/SIGTERM stop accepting connections and give in-flight
+	// requests up to 10s to finish.
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
-		srv.Shutdown(context.Background()) //nolint:errcheck
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}()
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+
+	fmt.Printf("Starting {{.PackageName}} on %s\n", app.Env.Addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server: %v", err)
 	}
+	// ListenAndServe returns as soon as Shutdown begins: wait for the drain,
+	// then for the workers to finish the event they are applying.
+	<-shutdownDone
+	wg.Wait()
 }

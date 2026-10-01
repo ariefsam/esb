@@ -43,13 +43,29 @@ func (p *{{.NamePascal}}OutboxPublisher) Run(ctx context.Context) {
 		}
 		n, err := p.publishBatch(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("{{.Name}} outbox publisher: %v — retrying in 3s", err)
-			time.Sleep(3 * time.Second)
+			if !p.wait(ctx, 3*time.Second) {
+				return
+			}
 			continue
 		}
-		if n == 0 {
-			time.Sleep(time.Second) // nothing pending; back off
+		if n == 0 && !p.wait(ctx, time.Second) { // nothing pending; back off
+			return
 		}
+	}
+}
+
+// wait pauses for d and reports false if ctx was cancelled first, so shutdown
+// is not held up by a back-off sleep.
+func (p *{{.NamePascal}}OutboxPublisher) wait(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
