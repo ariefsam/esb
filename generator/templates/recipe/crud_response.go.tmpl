@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 )
 
@@ -13,6 +15,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // writeError writes an {"error": "..."} JSON body with the given status code.
+// 4xx errors are the client's to fix, so their message is returned as is. A
+// 5xx error can carry internals (SQL, file paths, upstream responses): it is
+// logged server-side and the client only sees the generic status text.
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	msg := err.Error()
+	if status >= http.StatusInternalServerError {
+		log.Printf("handler: %d: %v", status, err)
+		msg = http.StatusText(status)
+	}
+	writeJSON(w, status, map[string]string{"error": msg})
 }

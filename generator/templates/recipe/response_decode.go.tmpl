@@ -1,0 +1,21 @@
+
+// maxBodyBytes caps a JSON request body. Raise it for an endpoint that
+// legitimately accepts larger payloads.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// decodeJSON decodes the request body into v, rejecting bodies larger than
+// maxBodyBytes. On failure it writes the error response (413 or 400) and
+// returns false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(v)
+	if err == nil {
+		return true
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, err)
+	} else {
+		writeError(w, http.StatusBadRequest, err)
+	}
+	return false
+}

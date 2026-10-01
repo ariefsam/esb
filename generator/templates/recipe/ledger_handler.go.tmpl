@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -23,8 +22,7 @@ func (h *{{.NamePascal}}Handler) Open(w http.ResponseWriter, r *http.Request) {
 		ID       string `json:"id"`
 		Currency string `json:"currency"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Open(r.Context(), req.ID, req.Currency); err != nil {
@@ -70,8 +68,7 @@ type {{.NamePascal}}AmountRequest struct {
 // and returning ok=false on malformed input.
 func decode{{.NamePascal}}Amount(w http.ResponseWriter, r *http.Request) ({{.NamePascal}}AmountRequest, bool) {
 	var req {{.NamePascal}}AmountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return req, false
 	}
 	return req, true
@@ -82,8 +79,7 @@ func (h *{{.NamePascal}}Handler) Freeze(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Freeze(r.Context(), req.ID); err != nil {
@@ -98,8 +94,7 @@ func (h *{{.NamePascal}}Handler) Close(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Close(r.Context(), req.ID); err != nil {

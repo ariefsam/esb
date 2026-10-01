@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -27,8 +26,7 @@ func (h *{{.NamePascal}}Handler) Transfer(w http.ResponseWriter, r *http.Request
 		To     string `json:"to"`
 		Amount int64  `json:"amount"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Transfer(r.Context(), req.ID, req.From, req.To, req.Amount); err != nil {

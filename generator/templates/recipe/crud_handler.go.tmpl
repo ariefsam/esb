@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -25,8 +24,7 @@ func (h *{{.NamePascal}}Handler) Create(w http.ResponseWriter, r *http.Request) 
 		ID string `json:"id"`
 		service.{{.NamePascal}}Input
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Create(r.Context(), req.ID, req.{{.NamePascal}}Input); err != nil {
@@ -42,8 +40,7 @@ func (h *{{.NamePascal}}Handler) Update(w http.ResponseWriter, r *http.Request) 
 		ID string `json:"id"`
 		service.{{.NamePascal}}Input
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Update(r.Context(), req.ID, req.{{.NamePascal}}Input); err != nil {
@@ -58,8 +55,7 @@ func (h *{{.NamePascal}}Handler) Archive(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.svc.Archive(r.Context(), req.ID); err != nil {

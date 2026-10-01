@@ -21,7 +21,8 @@ func New{{.HandlerNamePascal}}Handler(svc *service.{{.AggregateNamePascal}}Servi
 func (h *{{.HandlerNamePascal}}Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	// TODO: parse request body
 	// var req struct{ ... }
-	// if err := json.NewDecoder(r.Body).Decode(&req); err != nil { ... }
+	// Cap the body size so a client cannot stream an unbounded payload:
+	// if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil { ... }
 
 	// TODO: call service
 	// if err := h.svc.DoSomething(r.Context(), ...); err != nil { ... }
