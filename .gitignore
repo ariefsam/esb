@@ -1,0 +1,13 @@
+# Local Claude Code settings: machine-specific paths and permissions.
+.claude/settings.local.json
+
+# Build output (`go build` at the repo root produces ./esb).
+/esb
+/bin/
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

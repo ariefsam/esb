@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOVULNCHECK_VERSION: v1.8.0
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -25,6 +28,15 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Build
         run: go build ./...
 
@@ -32,6 +44,24 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        # The generator e2e test (TestAddFlow) compiles a freshly scaffolded
-        # project, which the go toolchain does inside the runner's module cache.
-        run: go test ./...
+        # The generator e2e tests compile and run freshly scaffolded projects,
+        # which the go toolchain does inside the runner's module cache.
+        run: go test -race ./...
+
+      - name: Vulnerability check (esb)
+        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+
+      - name: Vulnerability check (generated project)
+        # The dependency versions users ship come from generator/templates/go.mod.tmpl,
+        # so scan a project scaffolded with every recipe, not just esb itself.
+        run: |
+          go build -o "$RUNNER_TEMP/esb" .
+          app="$RUNNER_TEMP/generated-app"
+          mkdir -p "$app" && cd "$app"
+          "$RUNNER_TEMP/esb" init --here example.com/generated-app </dev/null
+          "$RUNNER_TEMP/esb" add recipe crud product name:string
+          "$RUNNER_TEMP/esb" add recipe ledger account
+          "$RUNNER_TEMP/esb" add recipe saga transfer
+          "$RUNNER_TEMP/esb" add recipe outbox account
+          "$RUNNER_TEMP/esb" add recipe statemachine ticket --states open,closed --transitions "open->closed"
+          go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...

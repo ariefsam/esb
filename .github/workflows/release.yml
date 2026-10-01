@@ -1,0 +1,48 @@
+name: Release
+
+# Runs when a semver tag is pushed, e.g.:
+#   git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0
+# `go install github.com/ariefsam/esb@v0.1.0` works from the tag alone; this
+# workflow additionally publishes prebuilt binaries with the version baked in.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build binaries
+        # esb uses a pure-Go SQLite driver, so every target cross-compiles
+        # with CGO disabled.
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            ext=""
+            if [ "$os" = windows ]; then ext=".exe"; fi
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X github.com/ariefsam/esb/cmd.version=$GITHUB_REF_NAME" \
+              -o "dist/esb_${GITHUB_REF_NAME}_${os}_${arch}${ext}" .
+          done
+          (cd dist && sha256sum -- * > checksums.txt)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
