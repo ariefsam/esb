@@ -63,6 +63,9 @@ func TestEmbeddedModeStartsWithoutPrivateKey(t *testing.T) {
 
 	cmd := exec.Command("go", "test", "-run", "TestEmbeddedModeStartsWithoutPrivateKey", "./...")
 	cmd.Dir = dest
+	// CGO_ENABLED=0 proves embedded mode needs no C toolchain: a cgo SQLite
+	// driver compiles to a stub here and fails at runtime ("requires cgo").
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		out := string(output)
 		// Surface a focused error so the regression is obvious.
@@ -86,7 +89,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -104,8 +107,69 @@ func TestWrongExpectedVersion(t *testing.T) {
 	}
 	cmd := exec.Command("go", "test", "./eventstore")
 	cmd.Dir = dest
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0") // real SQLite I/O without cgo
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated local store accepted wrong expected version: %v\n%s", err, output)
+	}
+}
+
+// TestInitProject_EmbeddedStoreHandlesConcurrentWrites guards the SQLite
+// connection options in projection.NewProjectionDB. Without busy_timeout and
+// _txlock=immediate, most concurrent StoreAtomic calls on the shared file
+// failed with "database is locked" (SQLITE_BUSY) — i.e. parallel HTTP
+// requests in embedded mode returned 500s.
+func TestInitProject_EmbeddedStoreHandlesConcurrentWrites(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "generated-app")
+	if err := InitProject("example.com/generated-app", dest); err != nil {
+		t.Fatal(err)
+	}
+	testSrc := `package projection
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"example.com/generated-app/eventstore"
+)
+
+func TestConcurrentStoreAtomic(t *testing.T) {
+	db, err := NewProjectionDB(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil { t.Fatal(err) }
+	if err := eventstore.MigrateLocalStore(db); err != nil { t.Fatal(err) }
+	store := eventstore.NewLocalStore(db)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 16*25)
+	for g := 0; g < 16; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for v := int64(0); v < 25; v++ {
+				e := eventstore.Event{AggregateName: "account", AggregateID: fmt.Sprintf("a%d", g), EventName: "Touched", Data: []byte("{}")}
+				if _, err := store.StoreAtomic(context.Background(), e, v); err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	if n := len(errs); n > 0 {
+		t.Fatalf("%d of %d concurrent writes failed, first: %v", n, 16*25, <-errs)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dest, "projection", "concurrency_test.go"), []byte(testSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "test", "-run", "TestConcurrentStoreAtomic", "./projection")
+	cmd.Dir = dest
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("embedded store failed under concurrent writes: %v\n%s", err, output)
 	}
 }
 

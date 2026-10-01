@@ -1,7 +1,9 @@
 package projection
 
 import (
-	"gorm.io/driver/sqlite"
+	"strings"
+
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -15,8 +17,11 @@ type ProjectionCursorRow struct {
 
 func (ProjectionCursorRow) TableName() string { return "projection_cursors" }
 
+// NewProjectionDB opens the SQLite database with a pure-Go driver (no cgo), so
+// the app builds and runs with CGO_ENABLED=0 — cross-compiles and scratch or
+// distroless images work out of the box.
 func NewProjectionDB(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(sqliteDSN(dsn)), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -31,4 +36,31 @@ func NewProjectionDB(dsn string) (*gorm.DB, error) {
 	}
 
 	return db, nil
+}
+
+// sqliteDSN adds the connection options every pooled connection needs, unless
+// the DSN already sets them:
+//   - busy_timeout(5000): wait up to 5s for a lock instead of failing at once
+//     with SQLITE_BUSY — the embedded event store, services and projection
+//     workers all write to this file concurrently.
+//   - _txlock=immediate: take the write lock at BEGIN. A deferred transaction
+//     that reads then writes (StoreAtomic's version check, projection
+//     upserts) cannot wait on the busy timeout when it upgrades its lock —
+//     SQLite fails it immediately to avoid deadlock.
+func sqliteDSN(dsn string) string {
+	var opts []string
+	if !strings.Contains(dsn, "busy_timeout") {
+		opts = append(opts, "_pragma=busy_timeout(5000)")
+	}
+	if !strings.Contains(dsn, "_txlock=") {
+		opts = append(opts, "_txlock=immediate")
+	}
+	if len(opts) == 0 {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + strings.Join(opts, "&")
 }

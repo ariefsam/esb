@@ -804,7 +804,7 @@ func OrdersByBuyer(ctx context.Context, db *gorm.DB) ([]OrderRow, error) {
 const dbSrc = `package projection
 
 import (
-` + ind + `"gorm.io/driver/sqlite"
+` + ind + `"github.com/glebarez/sqlite"
 ` + ind + `"gorm.io/gorm"
 )
 
