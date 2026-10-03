@@ -525,6 +525,48 @@ halaman `/storage` di `esb ui`.
 esb show storage
 ```
 
+### `esb show flow`
+
+Graph alur kode (handler → service method → event → event store → projection → query) sebagai
+YAML (default) atau JSON. Dibaca dari source proyek, bukan dari event yang
+tersimpan. Edge dengan `inferred: true` hanya dugaan dari penamaan. `stats`
+selalu untuk seluruh proyek; argumen aggregate hanya mempersempit `nodes` dan
+`edges`. Halaman `/flow` di `esb ui` memakai data yang sama, dan skema JSON-nya
+juga tersedia di `/flow.json[?aggregate=...]`.
+
+Setiap node punya `file` dan `line` (relatif ke proyek) ke deklarasinya. Di
+halaman `/flow`, klik sebuah node untuk membuka kodenya di editor Monaco
+read-only. Monaco (MIT, v0.57.0, ±3 MB) di-embed di `ui/static/monaco`, jadi
+tetap berjalan offline. Hanya file yang dirujuk node yang bisa dibaca lewat
+`/flow/source`.
+
+```bash
+esb show flow
+esb show flow user-settings -o json | jq '.gaps'
+```
+
+Layer graph: handler → service method → event → **event store** → projection →
+query. Setiap event punya edge `op: write` ke stream aggregate-nya di event store.
+Method yang membaca aggregate tanpa menulisnya (baca lintas aggregate, atau handler
+yang membaca write model langsung) punya edge `op: read`; baca aggregate sendiri
+sebelum menulis tidak digambar. Method yang menulis aggregate lain lewat command
+service lain punya edge `op: write` langsung. Akses dilacak dari pemanggilan method
+pada field bertipe `EventRepository` (`Store*` = tulis, lainnya = baca). Handler
+yang hanya membaca ditandai "baca write model langsung".
+
+Di halaman `/flow` (`esb ui`):
+
+- Setiap aggregate adalah satu pita horizontal di semua kolom; node tanpa satu
+  aggregate ada di pita "lintas aggregate".
+- Filter langsung berlaku tanpa reload: pilih beberapa aggregate sekaligus
+  (`?aggregate=a&aggregate=b`), "Hanya masalah" (`?problems=1`, node berperingatan
+  plus tetangganya), dan "Sembunyikan handler belum jadi" (`?stubs=hide`).
+- Klik node, cari namanya (tekan `/`), atau klik baris di tabel Gaps untuk menyorot
+  jalurnya dari handler sampai query. Pilihan disimpan di `?focus=` sehingga
+  link bisa dibagikan. Kode dibuka lewat "Lihat kode" atau klik dua kali.
+- Legenda sekaligus toggle jenis garis; tombol −/Fit/+ untuk zoom; judul kolom
+  tetap terlihat saat scroll.
+
 ---
 
 ### `esb migrate to-esb | to-embedded`

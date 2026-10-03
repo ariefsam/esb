@@ -13,5 +13,5 @@ var templatesFS embed.FS
 // binary must run offline, so we embed everything instead of pointing
 // at a CDN.
 //
-//go:embed static/app.css static/app.js
+//go:embed static/app.css static/app.js static/flow.js static/monaco
 var staticFS embed.FS

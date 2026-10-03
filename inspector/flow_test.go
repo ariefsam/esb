@@ -32,6 +32,7 @@ func flowModel() inspector.ProjectModel {
 		},
 		Service: []inspector.Service{{
 			Name:      "order",
+			Struct:    "OrderService",
 			Aggregate: "order",
 			Commands: []inspector.ServiceCommand{
 				{Name: "Place", Emits: []string{"OrderPlaced"}},
@@ -41,7 +42,7 @@ func flowModel() inspector.ProjectModel {
 		Handler: []inspector.Handler{{
 			Name:      "order",
 			Aggregate: "order",
-			Methods:   []inspector.HandlerMethod{{Name: "Place", Calls: []string{"Place"}}},
+			Methods:   []inspector.HandlerMethod{{Name: "Place", Calls: []string{"OrderService.Place"}}},
 		}},
 		Projection: []inspector.Projection{{
 			Name:       "order",

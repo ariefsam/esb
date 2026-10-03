@@ -2,7 +2,7 @@
 <section class="hero">
   <h1>Flow &amp; statistik</h1>
   <p class="muted">
-    Dibaca langsung dari AST proyek: handler → service command → event → projection → query.
+    Dibaca langsung dari AST proyek: handler → service method → event → event store → projection → query.
   </p>
 </section>
 
@@ -24,29 +24,69 @@
   </div>
 </section>
 
-<section>
+<section class="flow-section">
   <h2>Graph</h2>
-  <form class="flow-filter" method="get" action="/flow">
-    <label for="flow-aggregate">Aggregate</label>
-    <select id="flow-aggregate" name="aggregate">
-      <option value="">— semua —</option>
-      {{range .Aggregates}}
-      <option value="{{.}}" {{if eq . $.Filter}}selected{{end}}>{{.}}</option>
-      {{end}}
-    </select>
-    <button class="btn small" type="submit">Terapkan</button>
-    {{if .Filter}}<a class="btn small" href="/flow">Reset</a>{{end}}
+  <form class="flow-filter" id="flow-filter" method="get" action="/flow">
+    <div class="flow-filter-row">
+      <span class="flow-filter-label">Aggregate</span>
+      <div class="flow-chips">
+        {{range .Aggregates}}
+        <label class="flow-chip"><input type="checkbox" name="aggregate" value="{{.}}"{{if index $.Selected .}} checked{{end}}> {{.}}</label>
+        {{end}}
+      </div>
+    </div>
+    <div class="flow-filter-row">
+      <label class="flow-toggle"><input type="checkbox" name="problems" value="1"{{if .Problems}} checked{{end}}> Hanya masalah</label>
+      <label class="flow-toggle"><input type="checkbox" name="stubs" value="hide"{{if .HideStubs}} checked{{end}}> Sembunyikan handler belum jadi</label>
+      <noscript><button class="btn small" type="submit">Terapkan</button></noscript>
+      <a class="btn small" href="/flow" id="flow-reset">Reset</a>
+      <span class="muted small" id="flow-filter-status" aria-live="polite"></span>
+    </div>
   </form>
 
+  <div class="flow-toolbar">
+    <input type="search" id="flow-search" class="flow-search" list="flow-node-list"
+           placeholder="Cari node… (tekan /)" autocomplete="off" aria-label="Cari node">
+    <div class="flow-legend" role="group" aria-label="Jenis garis">
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="call" checked><span class="flow-swatch flow-swatch-call"></span>panggilan / emit</label>
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="write" checked><span class="flow-swatch flow-swatch-write"></span>tulis ke store</label>
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="read" checked><span class="flow-swatch flow-swatch-read"></span>baca dari store</label>
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="inferred" checked><span class="flow-swatch flow-swatch-inferred"></span>inferensi query</label>
+      <span class="flow-legend-item"><span class="flow-swatch flow-swatch-warn"></span>jalur buntu</span>
+    </div>
+    <div class="flow-zoom" role="group" aria-label="Zoom">
+      <button type="button" class="btn small" data-zoom="out" aria-label="Perkecil">−</button>
+      <button type="button" class="btn small" data-zoom="fit">Fit</button>
+      <button type="button" class="btn small" data-zoom="in" aria-label="Perbesar">+</button>
+    </div>
+  </div>
+
+  <div class="flow-detail" id="flow-detail" hidden>
+    <div class="flow-detail-text">
+      <strong id="flow-detail-title"></strong>
+      <span class="muted small" id="flow-detail-sub"></span>
+      <span class="muted small" id="flow-detail-path"></span>
+    </div>
+    <div class="flow-detail-actions">
+      <button type="button" class="btn small" id="flow-detail-code">Lihat kode</button>
+      <button type="button" class="btn small" id="flow-detail-clear">Hapus sorotan</button>
+    </div>
+  </div>
+
+  <div id="flow-dynamic">
+  <datalist id="flow-node-list">
+    {{range .SVG.Nodes}}<option value="{{.Full}}"></option>{{end}}
+  </datalist>
   {{if .SVG.Empty}}
   <p class="muted">
+    {{if or .Filter .Problems .HideStubs}}Tidak ada node yang cocok dengan filter ini.{{else}}
     Belum ada yang bisa digambar. Jalankan <a href="/commands?command=add-aggregate">Add aggregate</a>
-    atau sebuah recipe untuk membuat slice pertama.
+    atau sebuah recipe untuk membuat slice pertama.{{end}}
   </p>
   {{else}}
-  <div class="flow-canvas">
-    <svg viewBox="0 0 {{.SVG.Width}} {{.SVG.Height}}" width="{{.SVG.Width}}" height="{{.SVG.Height}}"
-         role="img" aria-label="Diagram alur kode proyek" class="flow-svg">
+  <div class="flow-canvas" id="flow-canvas">
+    <svg viewBox="0 0 {{.SVG.Width}} {{.SVG.Height}}" style="min-width: {{.SVG.Width}}px"
+         data-width="{{.SVG.Width}}" role="img" aria-label="Diagram alur kode proyek" class="flow-svg" id="flow-svg">
       <defs>
         <marker id="flow-arrow" viewBox="0 0 8 8" refX="7" refY="4"
                 markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -54,20 +94,25 @@
         </marker>
       </defs>
 
-      {{range .SVG.Columns}}
-      <text x="{{.X}}" y="20" class="flow-col-title">{{.Title}} ({{.Count}})</text>
-      {{end}}
+      <g class="flow-lanes">
+        {{range .SVG.Lanes}}
+        <rect x="2" y="{{.Y}}" width="{{$.SVG.LaneW}}" height="{{.H}}" rx="8" class="flow-lane{{if .Alt}} flow-lane-alt{{end}}" />
+        <text x="2" y="{{.TitleY}}" dx="10" class="flow-lane-title">{{.Title}}</text>
+        {{end}}
+      </g>
 
       <g class="flow-edges">
         {{range .SVG.Edges}}
-        <path d="{{.Path}}" class="flow-edge{{if .Inferred}} flow-edge-inferred{{end}}"
+        <path d="{{.Path}}" data-from="{{.From}}" data-to="{{.To}}"
+              class="flow-edge{{if .Inferred}} flow-edge-inferred{{else if eq .Op "read"}} flow-edge-read{{else if eq .Op "write"}} flow-edge-write{{else}} flow-edge-call{{end}}"
               marker-end="url(#flow-arrow)" />
         {{end}}
       </g>
 
       <g class="flow-nodes">
         {{range .SVG.Nodes}}
-        <g class="flow-node flow-node-{{.Kind}}{{if .Warn}} flow-node-warn{{end}}">
+        <g class="flow-node flow-node-{{.Kind}}{{if .Warn}} flow-node-warn{{end}}" data-id="{{.ID}}" data-label="{{.Full}}"
+           {{if .File}}data-file="{{.File}}" data-line="{{.Line}}" {{end}}tabindex="0" role="button" aria-label="Sorot jalur {{.Full}}">
           <title>{{.Full}}</title>
           <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6" />
           <text x="{{.X}}" y="{{.LabelY}}" dx="10" class="flow-node-label">{{.Label}}</text>
@@ -75,13 +120,33 @@
         </g>
         {{end}}
       </g>
+
+      <g class="flow-head" id="flow-head">
+        <rect x="0" y="0" width="{{.SVG.Width}}" height="30" class="flow-head-bg" />
+        {{range .SVG.Columns}}
+        <text x="{{.X}}" y="20" class="flow-col-title">{{.Title}} ({{.Count}})</text>
+        {{end}}
+      </g>
     </svg>
   </div>
-  <p class="muted small">
-    Garis putus-putus = relasi hasil inferensi dari penamaan (projection → query),
-    bukan dari pemanggilan yang benar-benar ada di kode. Kotak bergaris oranye = jalur buntu.
-  </p>
   {{end}}
+  </div>
+
+  <p class="muted small">
+    Satu pita = satu aggregate; node tanpa satu aggregate tertentu ada di pita "lintas aggregate".
+    Klik sebuah kotak (atau cari namanya) untuk menyorot jalurnya dari handler sampai query; buka kodenya
+    lewat "Lihat kode" atau klik dua kali. Baca aggregate sendiri sebelum menulis tidak digambar.
+  </p>
+  <div id="flow-code" class="flow-code" hidden>
+    <div class="flow-code-head">
+      <strong id="flow-code-title"></strong>
+      <button type="button" class="btn small" id="flow-code-close">Tutup</button>
+    </div>
+    <div id="flow-code-editor" class="flow-code-editor" data-monaco-base="/static/monaco/vs"></div>
+    <p class="muted small" id="flow-code-status"></p>
+  </div>
+  <link rel="stylesheet" href="/static/monaco/vs/editor/editor.main.css">
+  <script src="/static/flow.js"></script>
 </section>
 
 {{if .Stats.Gaps}}
@@ -93,7 +158,7 @@
     {{range .Stats.Gaps}}
       <tr>
         <td><span class="badge badge-{{.Severity}}">{{.Severity}}</span></td>
-        <td><code>{{.Subject}}</code></td>
+        <td>{{if .Node}}<a href="#flow-canvas" data-focus="{{.Node}}"><code>{{.Subject}}</code></a>{{else}}<code>{{.Subject}}</code>{{end}}</td>
         <td>{{.Message}}</td>
       </tr>
     {{end}}
@@ -102,7 +167,7 @@
 </section>
 {{end}}
 
-<section>
+<section id="flow-edge-list">
   <h2>Edges</h2>
   <p class="muted small">Daftar teks dari graf di atas — berguna untuk copy ke dokumentasi atau review.</p>
   {{if not .Graph.Edges}}

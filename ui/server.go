@@ -91,6 +91,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.routeRoot)
 	mux.HandleFunc("/aggregates/", s.handleAggregate)
 	mux.HandleFunc("/flow", s.handleFlow)
+	mux.HandleFunc("/flow.json", s.handleFlowJSON)
+	mux.HandleFunc("/flow/source", s.handleFlowSource)
 	mux.HandleFunc("/storage", s.handleStorage)
 	mux.HandleFunc("/storage/migrate", s.handleMigrate)
 	mux.HandleFunc("/commands", s.handleCommands)
@@ -160,7 +162,13 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		csp := "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		if r.URL.Path == "/flow" {
+			// The embedded Monaco editor injects <style> elements and ships its
+			// icon font as a data: URI. Scripts stay locked to 'self'.
+			csp += "; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+		}
+		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)

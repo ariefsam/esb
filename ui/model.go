@@ -112,8 +112,11 @@ type FlowPage struct {
 	Stats      inspector.Stats
 	Graph      inspector.FlowGraph
 	SVG        FlowSVG
-	Aggregates []string // every aggregate name, for the filter control
-	Filter     string   // active aggregate filter ("" = whole project)
+	Aggregates []string        // every aggregate name, for the filter control
+	Filter     string          // active aggregate filters joined by ", " ("" = whole project)
+	Selected   map[string]bool // aggregates ticked in the filter
+	Problems   bool            // only warned nodes and their neighbours
+	HideStubs  bool            // drop handlers that call no known command
 }
 
 // CommandsPage renders the command catalog and the per-command forms.

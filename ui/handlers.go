@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ariefsam/esb/inspector"
@@ -204,14 +206,31 @@ func (s *Server) handleFlow(w http.ResponseWriter, r *http.Request) {
 		names = append(names, a.Name)
 	}
 
-	filter := strings.TrimSpace(r.URL.Query().Get("aggregate"))
-	if filter != "" && !contains(names, filter) {
-		s.notFound(w, r, "Aggregate tidak ditemukan",
-			fmt.Sprintf("Aggregate %q tidak ada pada proyek ini.", filter))
-		return
+	q := r.URL.Query()
+	selected := map[string]bool{}
+	var aggregates []string
+	for _, a := range q["aggregate"] {
+		a = strings.TrimSpace(a)
+		if a == "" || selected[a] {
+			continue
+		}
+		if !contains(names, a) {
+			s.notFound(w, r, "Aggregate tidak ditemukan",
+				fmt.Sprintf("Aggregate %q tidak ada pada proyek ini.", a))
+			return
+		}
+		selected[a] = true
+		aggregates = append(aggregates, a)
 	}
+	opts := inspector.FlowOptions{
+		Aggregates: aggregates,
+		Problems:   q.Get("problems") == "1",
+		HideStubs:  q.Get("stubs") == "hide",
+	}
+	filter := strings.Join(aggregates, ", ")
 
-	graph := inspector.BuildFlow(model, filter)
+	graph := inspector.BuildFlowWith(model, opts)
+	inspector.AttachSources(model, s.projectRoot, &graph)
 	subtitle := "Seluruh proyek"
 	if filter != "" {
 		subtitle = "Filter: " + filter
@@ -225,6 +244,9 @@ func (s *Server) handleFlow(w http.ResponseWriter, r *http.Request) {
 		SVG:        layoutFlow(graph),
 		Aggregates: names,
 		Filter:     filter,
+		Selected:   selected,
+		Problems:   opts.Problems,
+		HideStubs:  opts.HideStubs,
 	}
 
 	s.renderLayout(w, http.StatusOK, Layout{
@@ -624,4 +646,74 @@ func (s *Server) renderScanError(w http.ResponseWriter, r *http.Request, err err
 		Root: s.projectRoot,
 		Nav:  defaultNav(""),
 	})
+}
+
+// handleFlowJSON serves the same graph as `esb show flow -o json`.
+func (s *Server) handleFlowJSON(w http.ResponseWriter, r *http.Request) {
+	model, err := inspector.Scan(s.projectRoot)
+	if err != nil {
+		http.Error(w, "scan failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	filter := strings.TrimSpace(r.URL.Query().Get("aggregate"))
+	if filter != "" {
+		found := false
+		for _, a := range model.Aggregate {
+			if a.Name == filter {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, fmt.Sprintf("aggregate %q not found", filter), http.StatusNotFound)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = inspector.WriteFlowExport(w, inspector.BuildFlowExport(model, s.projectRoot, filter), "json")
+}
+
+// maxSourceBytes caps what /flow/source will return; generated and
+// hand-written Go files in these packages are far smaller.
+const maxSourceBytes = 1 << 20
+
+// handleFlowSource returns the text of one Go file a flow node points at.
+// Only files that some node references are served (not any path under the
+// project), so a crafted ?file= cannot read config or secrets next to them.
+func (s *Server) handleFlowSource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rel := r.URL.Query().Get("file")
+	model, err := inspector.Scan(s.projectRoot)
+	if err != nil {
+		http.Error(w, "scan failed", http.StatusInternalServerError)
+		return
+	}
+	if rel == "" || !inspector.SourceFiles(model, s.projectRoot)[rel] {
+		http.NotFound(w, r)
+		return
+	}
+	full := filepath.Join(s.projectRoot, filepath.FromSlash(rel))
+	// A symlink inside the project must not lead outside it.
+	resolved, err := filepath.EvalSymlinks(full)
+	rootResolved, rerr := filepath.EvalSymlinks(s.projectRoot)
+	if err != nil || rerr != nil || !strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(data)
 }

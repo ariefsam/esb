@@ -5,8 +5,10 @@ package inspector
 // bank-account" but not which event travels that edge. The three passes here
 // close that gap by reading the three declaration shapes the generator emits:
 //
-//	service/<agg>.go            s.store(ctx, agg, "OrderPlaced", domain.OrderPlaced{…})
-//	server/handler/<h>.go       h.svc.Create(r.Context(), …)
+//	service/<agg>.go            s.store(ctx, agg, "OrderPlaced", …) or s.storeWithKey(…),
+//	                            directly or through unexported helpers, also of
+//	                            another service reached via a field (s.carts.checkout)
+//	server/handler/<h>.go       h.svc.Create(r.Context(), …), or any *service.<T> field
 //	projection/<p>_worker.go    switch e.EventName { case "OrderPlaced": … }
 //
 // Together they give the write-side chain handler method → service command →
@@ -25,32 +27,79 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ariefsam/esb/naming"
 )
 
-// ServiceCommand is one exported command method on a generated
-// *<X>Service — an entry point on the write side.
+// ServiceCommand is one exported method in service/ that reaches a store call
+// — an entry point on the write side.
 type ServiceCommand struct {
-	Name    string   // method name, e.g. "Create"
-	Emits   []string // events passed as a literal 3rd arg to store(), sorted
-	Dynamic bool     // a store() call passed a non-literal event name
+	Name  string   // method name, e.g. "Create"
+	Emits []string // events of the owning Service's aggregate, sorted
+	// Other are events stored on a different aggregate, reached through a
+	// helper of another service (s.cycles.attachEnvelope(…)). Sorted.
+	Other   []EventRef
+	Dynamic bool // a store() call passed a non-literal event name
 }
 
-// Service is one file in service/ that declares a <X>Service struct.
+// EventRef names an event together with the aggregate it is stored on.
+type EventRef struct {
+	Aggregate string
+	Event     string
+}
+
+// Service is one struct in service/ with commands: every <X>Service, plus any
+// other struct (a resolver, a saga) whose exported methods reach a store call.
 type Service struct {
-	Name      string // snake_case file name (without .go)
+	Name      string // snake_case: the file name for the file's <X>Service, else the struct name
+	Struct    string // Go type name, e.g. "OrderService"
+	File      string // project-relative path, e.g. "service/order.go"
 	Aggregate string // resolved aggregate store name ("" if not detected)
 	Commands  []ServiceCommand
 }
 
 // HandlerMethod is one exported method on a generated *<X>Handler and the
-// service commands it delegates to through the generated svc field.
+// service methods it calls through its *service.<T> fields.
 type HandlerMethod struct {
 	Name  string   // e.g. "Create"
-	Calls []string // service method names invoked as h.svc.<M>(…), sorted
+	Calls []string // "<Type>.<Method>" for every h.<field>.<Method>(…), sorted
 }
 
-// scanServices fills m.Service from service/*.go. A file that declares no
-// <X>Service struct (shared helpers, generated tests) is skipped.
+// svcMethod is one method declared in package service, as seen by the
+// cross-struct walk in scanServices.
+type svcMethod struct {
+	structName string
+	exported   bool
+	emits      []string
+	dynamic    bool
+	found      bool     // the body calls store()/storeWithKey() itself
+	calls      []string // "<Type>.<Method>" keys of methods it calls
+	esRead     bool     // calls a read method on an EventRepository field
+	esWrite    bool     // calls a Store* method on an EventRepository field
+}
+
+// svcStruct is one struct declared in package service.
+type svcStruct struct {
+	name    string
+	file    string            // file name without .go
+	primary bool              // the file's first <X>Service struct (the generated one)
+	service bool              // name ends in "Service"
+	fields  map[string]string // field name → struct type in package service
+	repos   map[string]bool   // fields typed *EventRepository (the event store)
+}
+
+// scanServices fills m.Service from service/*.go.
+//
+// The whole package is read at once because a command often stores through a
+// helper of another service: EnvelopeService.OpenEnvelope calls
+// s.cycles.attachEnvelope, which stores CycleEnvelopeAttached on the
+// budget-cycle aggregate. Calls are resolved through struct field types
+// (cycles *BudgetCycleService), so each store call is attributed to the
+// aggregate of the service it is made on, not of the caller.
+//
+// Only unexported callees are followed. An exported method that stores is a
+// command of its own and gets its own node, so following it would credit one
+// event to two commands.
 func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -59,6 +108,11 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 		}
 		return err
 	}
+
+	structs := map[string]*svcStruct{}
+	methods := map[string]*svcMethod{} // "<Type>.<Method>"
+	var order []string                 // method keys in file/declaration order
+	var files []*ast.File
 
 	for _, e := range entries {
 		name := e.Name()
@@ -72,53 +126,376 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 		if file == nil {
 			continue
 		}
-		structName, ok := declaredStructWithSuffix(file, "Service")
-		if !ok {
-			continue
+		base := strings.TrimSuffix(name, ".go")
+		primary, _ := declaredStructWithSuffix(file, "Service")
+		for _, st := range structTypes(file) {
+			structs[st.name] = &svcStruct{
+				name:    st.name,
+				file:    base,
+				primary: st.name == primary,
+				service: strings.HasSuffix(st.name, "Service") && len(st.name) > len("Service"),
+				fields:  st.fields,
+				repos:   st.repos,
+			}
 		}
-
-		serviceName := strings.TrimSuffix(name, ".go")
-		m.Service = append(m.Service, Service{
-			Name:      serviceName,
-			Aggregate: aggregateStoreName(aggregateNames, serviceName),
-			Commands:  serviceCommands(file, structName),
-		})
+		files = append(files, file)
 	}
 
-	sort.Slice(m.Service, func(i, j int) bool { return m.Service[i].Name < m.Service[j].Name })
-	return nil
-}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			recvName, recvType, ok := receiverOf(fn)
+			if !ok || structs[recvType] == nil {
+				continue
+			}
+			emits, dynamic, found := storedEventNames(fn.Body, recvName)
+			esRead, esWrite := eventStoreOps(fn.Body, recvName, structs[recvType].repos)
+			key := recvType + "." + fn.Name.Name
+			methods[key] = &svcMethod{
+				structName: recvType,
+				exported:   fn.Name.IsExported(),
+				emits:      emits,
+				dynamic:    dynamic,
+				found:      found,
+				calls:      methodCalls(fn.Body, recvName, recvType, structs[recvType].fields),
+				esRead:     esRead,
+				esWrite:    esWrite,
+			}
+			order = append(order, key)
+		}
+	}
 
-// serviceCommands returns the exported methods on *structName that reach
-// store(), with the event names each one emits. load/store are plumbing rather
-// than commands, and an exported method that never calls store() (a read
-// helper) is left out — the flow should show only edges that produce events.
-func serviceCommands(file *ast.File, structName string) []ServiceCommand {
-	var out []ServiceCommand
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || !fn.Name.IsExported() {
+	aggregateOf := func(st *svcStruct) string {
+		if st.service {
+			if st.primary {
+				return aggregateStoreName(aggregateNames, st.file)
+			}
+			return aggregateStoreName(aggregateNames, naming.ToSnakeCase(strings.TrimSuffix(st.name, "Service")))
+		}
+		return aggregateNames[naming.ToSnakeCase(st.name)]
+	}
+
+	type built struct{ cmds []ServiceCommand }
+	byStruct := map[string]*built{}
+	for _, key := range order {
+		root := methods[key]
+		if !root.exported {
 			continue
 		}
-		recvName, recvType, ok := receiverOf(fn)
-		if !ok || recvType != structName {
-			continue
+		emitted := map[EventRef]bool{}
+		var refs []EventRef
+		dynamic, found := false, false
+		seen := map[string]bool{key: true}
+		var walk func(mm *svcMethod)
+		walk = func(mm *svcMethod) {
+			found = found || mm.found
+			dynamic = dynamic || mm.dynamic
+			agg := aggregateOf(structs[mm.structName])
+			for _, e := range mm.emits {
+				ref := EventRef{Aggregate: agg, Event: e}
+				if !emitted[ref] {
+					emitted[ref] = true
+					refs = append(refs, ref)
+				}
+			}
+			for _, c := range mm.calls {
+				callee, ok := methods[c]
+				if !ok || callee.exported || seen[c] || isStoreMethod(c) {
+					continue
+				}
+				seen[c] = true
+				walk(callee)
+			}
 		}
-		emits, dynamic, found := storedEventNames(fn.Body, recvName)
+		walk(root)
 		if !found {
 			continue
 		}
-		sort.Strings(emits)
-		out = append(out, ServiceCommand{Name: fn.Name.Name, Emits: emits, Dynamic: dynamic})
+		bs := byStruct[root.structName]
+		if bs == nil {
+			bs = &built{}
+			byStruct[root.structName] = bs
+		}
+		// Every ref sits in Other until the owner's aggregate is known; the
+		// loop below moves the owner's own events into Emits.
+		bs.cmds = append(bs.cmds, ServiceCommand{
+			Name:    strings.TrimPrefix(key, root.structName+"."),
+			Other:   refs,
+			Dynamic: dynamic,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+
+	names := make([]string, 0, len(structs))
+	for n := range structs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		st := structs[n]
+		bs := byStruct[n]
+		// A generated <X>Service is listed even before it has commands, as
+		// before; any other struct only when it actually stores events.
+		if bs == nil && !st.primary {
+			continue
+		}
+		svc := Service{Struct: n, File: "service/" + st.file + ".go", Aggregate: aggregateOf(st)}
+		svc.Name = naming.ToSnakeCase(n)
+		if st.primary {
+			svc.Name = st.file
+		}
+		if bs != nil {
+			if svc.Aggregate == "" {
+				svc.Aggregate = soleAggregate(bs.cmds)
+			}
+			for _, c := range bs.cmds {
+				refs := c.Other
+				c.Other = nil
+				for _, r := range refs {
+					if r.Aggregate == svc.Aggregate {
+						c.Emits = append(c.Emits, r.Event)
+					} else {
+						c.Other = append(c.Other, r)
+					}
+				}
+				sort.Strings(c.Emits)
+				sort.Slice(c.Other, func(i, j int) bool {
+					if c.Other[i].Aggregate != c.Other[j].Aggregate {
+						return c.Other[i].Aggregate < c.Other[j].Aggregate
+					}
+					return c.Other[i].Event < c.Other[j].Event
+				})
+				svc.Commands = append(svc.Commands, c)
+			}
+			sort.Slice(svc.Commands, func(i, j int) bool { return svc.Commands[i].Name < svc.Commands[j].Name })
+		}
+		m.Service = append(m.Service, svc)
+	}
+	sort.Slice(m.Service, func(i, j int) bool { return m.Service[i].Name < m.Service[j].Name })
+
+	// Event store access: every exported method, with what it reads and
+	// writes in the event store, following every callee (exported too), since
+	// here the question is "does this entry point hit the store", not "which
+	// command owns this event".
+	for _, key := range order {
+		root := methods[key]
+		if !root.exported {
+			continue
+		}
+		reads, writes := map[string]bool{}, map[string]bool{}
+		seen := map[string]bool{key: true}
+		var walk func(mm *svcMethod)
+		walk = func(mm *svcMethod) {
+			agg := aggregateOf(structs[mm.structName])
+			if agg != "" {
+				if mm.esRead {
+					reads[agg] = true
+				}
+				if mm.esWrite {
+					writes[agg] = true
+				}
+			}
+			for _, c := range mm.calls {
+				if callee, ok := methods[c]; ok && !seen[c] {
+					seen[c] = true
+					walk(callee)
+				}
+			}
+		}
+		walk(root)
+		if len(reads) == 0 && len(writes) == 0 {
+			continue
+		}
+		st := structs[root.structName]
+		name := naming.ToSnakeCase(st.name)
+		if st.primary {
+			name = st.file
+		}
+		m.StoreAccess = append(m.StoreAccess, StoreAccess{
+			Service: name,
+			Struct:  st.name,
+			Method:  strings.TrimPrefix(key, st.name+"."),
+			Reads:   sortedKeys(reads),
+			Writes:  sortedKeys(writes),
+		})
+	}
+	sort.Slice(m.StoreAccess, func(i, j int) bool {
+		a, b := m.StoreAccess[i], m.StoreAccess[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		return a.Method < b.Method
+	})
+	return nil
+}
+
+// StoreAccess is one exported method in service/ that reaches the event store,
+// directly or through any callee, with the aggregates it reads and writes.
+type StoreAccess struct {
+	Service string // same naming as Service.Name
+	Struct  string // Go type, e.g. "CycleResolver"
+	Method  string
+	Reads   []string // aggregates loaded (Retrieve, LatestSnapshot, FetchAll), sorted
+	Writes  []string // aggregates written (StoreAtomic, StoreSnapshot), sorted
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
-// storedEventNames walks a command body for `<recvName>.store(ctx, agg, X, …)`
+// eventStoreOps reports whether body reads from or writes to the event store
+// through a field of the receiver typed as an EventRepository. Store* methods
+// (StoreAtomic, StoreSnapshot) write; every other method reads.
+func eventStoreOps(body *ast.BlockStmt, recvName string, repos map[string]bool) (read, write bool) {
+	if len(repos) == 0 {
+		return false, false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		method, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		field, ok := method.X.(*ast.SelectorExpr)
+		if !ok || !repos[field.Sel.Name] {
+			return true
+		}
+		if ident, ok := field.X.(*ast.Ident); !ok || ident.Name != recvName {
+			return true
+		}
+		if strings.HasPrefix(method.Sel.Name, "Store") {
+			write = true
+		} else {
+			read = true
+		}
+		return true
+	})
+	return read, write
+}
+
+// isStoreMethod reports whether key ("<Type>.<Method>") is the store plumbing
+// itself. Its event name is a parameter, already read at the call site, so
+// walking into it would only mark the caller dynamic.
+func isStoreMethod(key string) bool {
+	return strings.HasSuffix(key, ".store") || strings.HasSuffix(key, ".storeWithKey")
+}
+
+// soleAggregate returns the aggregate every event of cmds is stored on, or ""
+// when they span several. It names the aggregate of a non-service struct such
+// as a resolver that only ever writes one aggregate.
+func soleAggregate(cmds []ServiceCommand) string {
+	agg := ""
+	for _, c := range cmds {
+		for _, r := range c.Other {
+			if agg != "" && r.Aggregate != agg {
+				return ""
+			}
+			agg = r.Aggregate
+		}
+	}
+	return agg
+}
+
+type structType struct {
+	name   string
+	fields map[string]string
+	repos  map[string]bool
+}
+
+// structTypes lists the struct types declared in file with, for each named
+// field whose type is a local identifier (T or *T), that identifier.
+func structTypes(file *ast.File) []structType {
+	var out []structType
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			fields := map[string]string{}
+			repos := map[string]bool{}
+			if st.Fields != nil {
+				for _, f := range st.Fields.List {
+					t := f.Type
+					if star, ok := t.(*ast.StarExpr); ok {
+						t = star.X
+					}
+					typeName := ""
+					switch x := t.(type) {
+					case *ast.Ident:
+						typeName = x.Name
+						for _, nm := range f.Names {
+							fields[nm.Name] = x.Name
+						}
+					case *ast.SelectorExpr:
+						typeName = x.Sel.Name
+					}
+					if strings.HasSuffix(typeName, "EventRepository") {
+						for _, nm := range f.Names {
+							repos[nm.Name] = true
+						}
+					}
+				}
+			}
+			out = append(out, structType{name: ts.Name.Name, fields: fields, repos: repos})
+		}
+	}
+	return out
+}
+
+// methodCalls lists "<Type>.<Method>" for every <recv>.<M>(…) (Type is the
+// receiver's own) and <recv>.<field>.<M>(…) (Type from the field's declared
+// type) call in body.
+func methodCalls(body *ast.BlockStmt, recvName, recvType string, fields map[string]string) []string {
+	var calls []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch x := sel.X.(type) {
+		case *ast.Ident:
+			if x.Name == recvName {
+				calls = append(calls, recvType+"."+sel.Sel.Name)
+			}
+		case *ast.SelectorExpr:
+			if ident, ok := x.X.(*ast.Ident); ok && ident.Name == recvName {
+				if t := fields[x.Sel.Name]; t != "" {
+					calls = append(calls, t+"."+sel.Sel.Name)
+				}
+			}
+		}
+		return true
+	})
+	return calls
+}
+
+// storedEventNames walks a method body for `<recvName>.store(ctx, agg, X, …)`
+// or the idempotent `<recvName>.storeWithKey(ctx, agg, X, data, key)`
 // and reports the literal event names in X. found is false when the body never
-// calls store() at all, which is how serviceCommands tells a command apart from
-// a plain helper.
+// calls a store method itself.
 func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dynamic, found bool) {
 	seen := map[string]bool{}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -127,7 +504,7 @@ func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dyn
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "store" {
+		if !ok || (sel.Sel.Name != "store" && sel.Sel.Name != "storeWithKey") {
 			return true
 		}
 		if ident, ok := sel.X.(*ast.Ident); !ok || ident.Name != recvName {
@@ -154,8 +531,10 @@ func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dyn
 }
 
 // handlerMethods returns the exported methods on *structName and the service
-// commands each delegates to through the generated svc field.
+// methods each calls through a *service.<T> field (the generated svc field or
+// any other, such as cycles *service.CycleResolver).
 func handlerMethods(file *ast.File, structName string) []HandlerMethod {
+	fields := serviceFields(file, structName)
 	var out []HandlerMethod
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -166,7 +545,7 @@ func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 		if !ok || recvType != structName {
 			continue
 		}
-		calls := serviceCallsIn(fn.Body, recvName)
+		calls := serviceCallsIn(fn.Body, recvName, fields)
 		if len(calls) == 0 {
 			continue
 		}
@@ -176,8 +555,43 @@ func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 	return out
 }
 
-// serviceCallsIn collects the <M> of every `<recvName>.svc.<M>(…)` call.
-func serviceCallsIn(body *ast.BlockStmt, recvName string) []string {
+// serviceFields maps each field of structName typed *service.<T> (or
+// service.<T>) to T.
+func serviceFields(file *ast.File, structName string) map[string]string {
+	fields := map[string]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name.Name != structName {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return false
+		}
+		for _, f := range st.Fields.List {
+			t := f.Type
+			if star, ok := t.(*ast.StarExpr); ok {
+				t = star.X
+			}
+			sel, ok := t.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "service" {
+				continue
+			}
+			for _, nm := range f.Names {
+				fields[nm.Name] = sel.Sel.Name
+			}
+		}
+		return false
+	})
+	return fields
+}
+
+// serviceCallsIn collects "<T>.<M>" for every `<recvName>.<field>.<M>(…)` call
+// whose field is typed *service.<T>.
+func serviceCallsIn(body *ast.BlockStmt, recvName string, fields map[string]string) []string {
 	var calls []string
 	seen := map[string]bool{}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -190,15 +604,20 @@ func serviceCallsIn(body *ast.BlockStmt, recvName string) []string {
 			return true
 		}
 		field, ok := method.X.(*ast.SelectorExpr)
-		if !ok || field.Sel.Name != "svc" {
+		if !ok {
 			return true
 		}
 		if ident, ok := field.X.(*ast.Ident); !ok || ident.Name != recvName {
 			return true
 		}
-		if !seen[method.Sel.Name] {
-			seen[method.Sel.Name] = true
-			calls = append(calls, method.Sel.Name)
+		t := fields[field.Sel.Name]
+		if t == "" {
+			return true
+		}
+		key := t + "." + method.Sel.Name
+		if !seen[key] {
+			seen[key] = true
+			calls = append(calls, key)
 		}
 		return true
 	})

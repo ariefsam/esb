@@ -211,7 +211,7 @@ func TestGolden_FlowEdgesFromRecipeOutput(t *testing.T) {
 			handlerCalls = append(handlerCalls, method.Calls...)
 		}
 	}
-	for _, want := range []string{"Create", "Update", "Archive"} {
+	for _, want := range []string{"ProductService.Create", "ProductService.Update", "ProductService.Archive"} {
 		if !slices.Contains(handlerCalls, want) {
 			t.Errorf("handler calls = %v, want to contain %s", handlerCalls, want)
 		}

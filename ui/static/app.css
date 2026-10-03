@@ -603,33 +603,73 @@ label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer;
 .badge-warn { background: #fef3c7; color: #92400e; }
 .badge-info { background: var(--bg-soft); color: var(--fg-mute); }
 
-.flow-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
+/* Filter form, toolbar and detail bar span the full width like the canvas. */
+.flow-filter, .flow-toolbar, .flow-detail {
+  width: calc(100vw - 48px);
+  margin-left: calc(50% - 50vw + 24px);
 }
-.flow-filter label { font-size: 12px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.06em; }
-.flow-filter select {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 13px;
+.flow-filter { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.flow-filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.flow-filter-label { font-size: 12px; color: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 4px; }
+.flow-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.flow-chip, .flow-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12px; color: var(--fg); background: var(--bg); cursor: pointer; user-select: none;
 }
+/* The global form rule stacks a label's input above its text and pads the
+   input like a text field; chips and legend toggles are inline checkboxes. */
+.flow-chip, .flow-toggle, .flow-legend-item { flex-direction: row; }
+.flow-chip input, .flow-toggle input, .flow-legend-item input {
+  width: auto; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); cursor: pointer;
+}
+.flow-legend-item span { font-weight: normal; color: inherit; }
+.flow-chip:has(input:checked), .flow-toggle:has(input:checked) {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+}
+
+.flow-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.flow-search {
+  flex: 0 1 320px; min-width: 200px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); font-size: 13px;
+}
+.flow-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--fg-mute); }
+.flow-legend-item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.flow-legend-item input { margin: 0; }
+.flow-swatch { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--fg-mute); }
+.flow-swatch-call { opacity: 0.6; }
+.flow-swatch-write { border-top-color: #ea580c; }
+.flow-swatch-read { border-top: 2px dashed #2563eb; }
+.flow-swatch-inferred { border-top: 2px dashed var(--fg-mute); opacity: 0.6; }
+.flow-swatch-warn { width: 14px; height: 10px; border: 1.5px solid var(--warn); border-radius: 3px; }
+.flow-zoom { display: inline-flex; gap: 4px; margin-left: auto; }
+
+.flow-detail {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent-soft);
+}
+.flow-detail[hidden] { display: none; }
+.flow-detail-text { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.flow-detail-actions { display: flex; gap: 6px; }
 
 /* The diagram is wider than the page on any real project, so it scrolls
    inside its own box rather than making the whole page scroll sideways. */
 .flow-canvas {
-  overflow-x: auto;
+  overflow: auto;
+  /* As tall as the viewport, so the canvas scrolls (and its column titles
+     stay pinned, see flow.js) instead of the page. */
+  max-height: calc(100vh - 120px);
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-card);
   padding: 8px;
+  /* Break out of the 1000px <main> column so the graph uses the full viewport. */
+  width: calc(100vw - 48px);
+  margin-left: calc(50% - 50vw + 24px);
 }
-.flow-svg { display: block; max-width: none; }
+/* Fill the canvas; the inline min-width (native size) keeps wide graphs
+   readable by scrolling instead of shrinking the text. */
+.flow-svg { display: block; max-width: none; width: 100%; height: auto; }
 
 .flow-col-title {
   font-size: 11px;
@@ -670,3 +710,39 @@ label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer;
 .flow-node-warn .flow-node-sub { fill: var(--warn); }
 
 p.small, .muted.small { font-size: 12px; }
+
+/* Code viewer under the graph (Monaco, see static/flow.js). */
+.flow-node { cursor: pointer; }
+.flow-node:hover rect, .flow-node:focus rect { stroke-width: 2; }
+.flow-node:focus { outline: none; }
+.flow-code { margin-top: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); padding: 8px; width: calc(100vw - 48px); margin-left: calc(50% - 50vw + 24px); }
+.flow-code[hidden] { display: none; }
+.flow-code-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.flow-code-editor { height: 460px; }
+.flow-code-line { background: rgba(255, 200, 0, 0.18); }
+
+/* Event store layer: one node per aggregate stream, read/write edges. */
+.flow-node-store rect { fill: var(--bg-soft); stroke: var(--fg); stroke-width: 1.5; }
+.flow-edge-read { stroke: #2563eb; stroke-dasharray: 5 3; opacity: 0.65; }
+.flow-edge-write { stroke: #ea580c; opacity: 0.55; }
+
+/* Swimlanes: one band per aggregate across every column. */
+.flow-lane { fill: var(--bg); stroke: var(--border); }
+.flow-lane-alt { fill: var(--bg-soft); }
+.flow-lane-title { font-size: 10px; font-weight: 600; fill: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Column titles, pinned to the top of the canvas by flow.js. */
+.flow-head-bg { fill: var(--bg-card); opacity: 0.95; }
+
+/* Edge-type toggles (legend checkboxes). */
+.hide-call .flow-edge-call,
+.hide-write .flow-edge-write,
+.hide-read .flow-edge-read,
+.hide-inferred .flow-edge-inferred { display: none; }
+
+/* Path highlighting: everything dims except the selected node's path. */
+.is-focused .flow-node { opacity: 0.18; }
+.is-focused .flow-edge { opacity: 0.06; }
+.is-focused .flow-node.is-on { opacity: 1; }
+.is-focused .flow-edge.is-on { opacity: 0.9; stroke-width: 2; }
+.flow-node.is-selected rect { stroke: var(--accent); stroke-width: 3; }

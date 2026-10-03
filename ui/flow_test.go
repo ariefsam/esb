@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,5 +208,200 @@ func TestTruncateLabel(t *testing.T) {
 	// Multi-byte input must not be cut mid-character.
 	if got := truncateLabel("héllo wörld ünïcode", 8); strings.ContainsRune(got, '�') {
 		t.Errorf("truncateLabel produced an invalid rune: %q", got)
+	}
+}
+
+func TestServer_FlowJSON(t *testing.T) {
+	ts := flowTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/flow.json")
+	if err != nil {
+		t.Fatalf("GET /flow.json: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var got inspector.FlowExport
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Version != inspector.FlowExportVersion || len(got.Nodes) == 0 {
+		t.Errorf("unexpected export: version=%d nodes=%d", got.Version, len(got.Nodes))
+	}
+
+	bad, err := http.Get(ts.URL + "/flow.json?aggregate=nope")
+	if err != nil {
+		t.Fatalf("GET bad filter: %v", err)
+	}
+	defer bad.Body.Close()
+	if bad.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown aggregate status = %d, want 404", bad.StatusCode)
+	}
+}
+
+func TestServer_FlowSource(t *testing.T) {
+	ts := flowTestServer(t)
+
+	get := func(q string) (int, string) {
+		resp, err := http.Get(ts.URL + "/flow/source?file=" + q)
+		if err != nil {
+			t.Fatalf("GET %s: %v", q, err)
+		}
+		defer resp.Body.Close()
+		body, _ := readAll(resp.Body)
+		return resp.StatusCode, body
+	}
+
+	if code, body := get("service/order.go"); code != http.StatusOK || !strings.Contains(body, "OrderService") {
+		t.Errorf("referenced file: status=%d body=%q", code, body)
+	}
+	// Anything a flow node does not point at must be refused, including
+	// traversal attempts and files that merely exist in the project.
+	for _, bad := range []string{"", "go.mod", "../go.mod", "..%2F..%2Fetc%2Fpasswd", "/etc/passwd", "service/missing.go"} {
+		if code, _ := get(bad); code != http.StatusNotFound {
+			t.Errorf("file=%q status = %d, want 404", bad, code)
+		}
+	}
+
+	resp, err := http.Post(ts.URL+"/flow/source?file=service/order.go", "text/plain", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST status = %d, want 405", resp.StatusCode)
+	}
+}
+
+func TestServer_FlowPageLinksSource(t *testing.T) {
+	ts := flowTestServer(t)
+	resp, err := http.Get(ts.URL + "/flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := readAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(body, `data-file="service/order.go"`) {
+		t.Error("command node missing data-file")
+	}
+	// Monaco is relaxed to inline styles only on /flow; scripts stay 'self'.
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "style-src 'self' 'unsafe-inline'") || strings.Contains(csp, "script-src") {
+		t.Errorf("unexpected CSP on /flow: %q", csp)
+	}
+}
+
+// TestLayoutFlow_Swimlanes: every aggregate is one band across all columns,
+// each node sits inside its own band, nodes with no aggregate go to the
+// cross-aggregate band on top, and bands never overlap.
+func TestLayoutFlow_Swimlanes(t *testing.T) {
+	g := inspector.FlowGraph{Columns: []inspector.FlowColumn{
+		{Kind: inspector.FlowCommand, Nodes: []inspector.FlowNode{
+			{ID: "command:r.Resolve", Aggregate: ""},
+			{ID: "command:a.Do", Aggregate: "a"},
+		}},
+		{Kind: inspector.FlowEvent, Nodes: []inspector.FlowNode{
+			{ID: "event:a/One", Aggregate: "a"},
+			{ID: "event:a/Two", Aggregate: "a"},
+			{ID: "event:b/Three", Aggregate: "b"},
+		}},
+		{Kind: inspector.FlowStore, Nodes: []inspector.FlowNode{
+			{ID: "store:a", Aggregate: "a"},
+			{ID: "store:b", Aggregate: "b"},
+		}},
+	}}
+	svg := layoutFlow(g)
+	if len(svg.Lanes) != 3 || svg.Lanes[0].Title != crossLane || svg.Lanes[1].Title != "a" || svg.Lanes[2].Title != "b" {
+		t.Fatalf("lanes = %+v, want cross, a, b", svg.Lanes)
+	}
+	lane := map[string]FlowSVGLane{}
+	for _, l := range svg.Lanes {
+		lane[l.Title] = l
+	}
+	want := map[string]string{
+		"command:r.Resolve": crossLane, "command:a.Do": "a", "event:a/One": "a",
+		"event:a/Two": "a", "event:b/Three": "b", "store:a": "a", "store:b": "b",
+	}
+	for _, n := range svg.Nodes {
+		l := lane[want[n.ID]]
+		if n.Y < l.Y || n.Y+n.H > l.Y+l.H {
+			t.Errorf("node %s (y %d..%d) outside lane %s %+v", n.ID, n.Y, n.Y+n.H, want[n.ID], l)
+		}
+	}
+	for i := 1; i < len(svg.Lanes); i++ {
+		if prev := svg.Lanes[i-1]; prev.Y+prev.H >= svg.Lanes[i].Y {
+			t.Errorf("lanes overlap: %+v / %+v", prev, svg.Lanes[i])
+		}
+	}
+	if last := svg.Lanes[len(svg.Lanes)-1]; last.Y+last.H > svg.Height {
+		t.Errorf("last lane escapes canvas height %d: %+v", svg.Height, last)
+	}
+}
+
+// TestLayoutFlow_BarycenterOrder: within a band, a method is placed next to
+// the event it leads to rather than in label order, so edges do not cross.
+func TestLayoutFlow_BarycenterOrder(t *testing.T) {
+	g := inspector.FlowGraph{
+		Columns: []inspector.FlowColumn{
+			{Kind: inspector.FlowCommand, Nodes: []inspector.FlowNode{
+				{ID: "command:a.Alpha", Label: "Alpha", Aggregate: "a"},
+				{ID: "command:a.Beta", Label: "Beta", Aggregate: "a"},
+			}},
+			{Kind: inspector.FlowEvent, Nodes: []inspector.FlowNode{
+				{ID: "event:a/First", Label: "First", Aggregate: "a"},
+				{ID: "event:a/Second", Label: "Second", Aggregate: "a"},
+			}},
+		},
+		Edges: []inspector.FlowEdge{
+			{From: "command:a.Alpha", To: "event:a/Second"},
+			{From: "command:a.Beta", To: "event:a/First"},
+		},
+	}
+	y := map[string]int{}
+	for _, n := range layoutFlow(g).Nodes {
+		y[n.ID] = n.Y
+	}
+	if y["command:a.Beta"] >= y["command:a.Alpha"] {
+		t.Errorf("Beta (→ First) should sit above Alpha (→ Second): %v", y)
+	}
+}
+
+// TestServer_FlowFilters: several ?aggregate= values, the problems/stubs
+// switches render, and the gap table links to graph nodes.
+func TestServer_FlowFilters(t *testing.T) {
+	ts := flowTestServer(t)
+	for path, want := range map[string]int{
+		"/flow?aggregate=order&aggregate=order": http.StatusOK,
+		"/flow?problems=1&stubs=hide":           http.StatusOK,
+		"/flow?aggregate=order&aggregate=nope":  http.StatusNotFound,
+	} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := readAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s status = %d, want %d", path, resp.StatusCode, want)
+		}
+		if want == http.StatusOK && strings.Contains(body, "render error") {
+			t.Errorf("%s render error: %q", path, body)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/flow?aggregate=order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := readAll(resp.Body)
+	resp.Body.Close()
+	for _, want := range []string{`value="order" checked`, `data-from="`, `id="flow-head"`, `class="flow-lane`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("flow page missing %q", want)
+		}
 	}
 }

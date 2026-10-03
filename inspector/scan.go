@@ -37,12 +37,16 @@ type ProjectModel struct {
 	Aggregate   []Aggregate // every aggregate discovered in domain/, sorted by aggregate-store name
 	Projection  []Projection
 	Handler     []Handler
-	Service     []Service // command services in service/, sorted by file name
+	Service     []Service     // command services in service/, sorted by file name
+	StoreAccess []StoreAccess // exported service methods that reach the event store
 	Query       []Query
 	Wire        WireGraph
-	Migrate     []string    // GORM models in projection/db.go AutoMigrate
-	RunWorker   []string    // workers in main.go
-	Storage     StorageInfo // event store mode + per-aggregate event counts
+	Migrate     []string // GORM models in projection/db.go AutoMigrate
+	RunWorker   []string // workers in main.go
+	// UnregisteredWorker lists projection worker files that exist in
+	// projection/ but are not started in main.go.
+	UnregisteredWorker []UnregisteredWorker
+	Storage            StorageInfo // event store mode + per-aggregate event counts
 }
 
 // Aggregate is one file in domain/ (excluding event.go / errors.go).
@@ -171,6 +175,7 @@ func Scan(rootDir string) (ProjectModel, error) {
 	if err := scanMain(filepath.Join(rootDir, "main.go"), &m); err != nil {
 		return m, err
 	}
+	dropUnregisteredWorkers(&m)
 	m.Storage = ScanStorage(rootDir)
 
 	return m, nil
@@ -980,6 +985,77 @@ func scanDB(path string, m *ProjectModel) error {
 // We anchor on the line start (only whitespace prefix) so struct-field
 // references like `Handler: app.Handler,` in the App literal are ignored.
 var runWorkerRegex = regexp.MustCompile(`(?m)^\s*app\.([A-Z][A-Za-z0-9]+),`)
+
+// UnregisteredWorker is a projection worker file main.go does not start.
+// Host is the running worker that took over its events ("" when none did).
+type UnregisteredWorker struct {
+	Name string
+	Host string
+}
+
+// dropUnregisteredWorkers keeps m.Projection to the workers main.go starts.
+// A standalone *_worker.go that is not started can still matter: a single
+// read-model worker may dispatch to the apply<Aggregate> switch that lives in
+// that file. So its events are merged into a running multi-aggregate worker
+// that covers its aggregates, and only then is the file dropped from the
+// count. With no such host the events are not consumed by anything and are
+// dropped too. When main.go lists no workers at all (missing file or no
+// marker block) registration is unknown, so every worker is kept.
+func dropUnregisteredWorkers(m *ProjectModel) {
+	if len(m.RunWorker) == 0 {
+		return
+	}
+	running := map[string]bool{}
+	for _, w := range m.RunWorker {
+		running[w] = true
+	}
+	var kept, extra []Projection
+	for _, p := range m.Projection {
+		if running[naming.ToPascalCase(p.Name)+"ProjectionWorker"] {
+			kept = append(kept, p)
+		} else {
+			extra = append(extra, p)
+		}
+	}
+	for _, p := range extra {
+		u := UnregisteredWorker{Name: p.Name}
+		for i := range kept {
+			if kept[i].Multi && coversAll(kept[i].Aggregates, p.Aggregates) {
+				kept[i].Events = mergeSorted(kept[i].Events, p.Events)
+				u.Host = kept[i].Name
+				break
+			}
+		}
+		m.UnregisteredWorker = append(m.UnregisteredWorker, u)
+	}
+	m.Projection = kept
+}
+
+func coversAll(have, want []string) bool {
+	set := map[string]bool{}
+	for _, h := range have {
+		set[h] = true
+	}
+	for _, w := range want {
+		if !set[w] {
+			return false
+		}
+	}
+	return len(want) > 0
+}
+
+func mergeSorted(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range append(append([]string{}, a...), b...) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // scanMain lists the workers that are actually started in main.go.
 func scanMain(path string, m *ProjectModel) error {

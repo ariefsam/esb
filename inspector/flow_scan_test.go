@@ -178,8 +178,8 @@ func (h *OrderHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if len(methods) != 1 {
 		t.Fatalf("handler methods = %+v, want only the one that calls svc", methods)
 	}
-	if methods[0].Name != "Place" || !slices.Equal(methods[0].Calls, []string{"Place"}) {
-		t.Errorf("handler method = %+v, want Place calling [Place]", methods[0])
+	if methods[0].Name != "Place" || !slices.Equal(methods[0].Calls, []string{"OrderService.Place"}) {
+		t.Errorf("handler method = %+v, want Place calling [OrderService.Place]", methods[0])
 	}
 }
 
@@ -239,5 +239,385 @@ func (w *OrderProjectionWorker) applyEvent(e any) error {
 	}
 	if len(m.Projection[0].Events) != 0 {
 		t.Errorf("worker events = %v, want none", m.Projection[0].Events)
+	}
+}
+
+// TestScan_StandaloneWorkerFoldedIntoReadModel: a *_worker.go that main.go does
+// not start still holds the apply switch a running multi-aggregate worker
+// dispatches to. It must not count as a projection, but its events must still
+// be consumed by the worker that really runs.
+func TestScan_StandaloneWorkerFoldedIntoReadModel(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"projection/read_model_worker.go": `package projection
+
+var readModelAggregateNames = []string{"order"}
+
+type ReadModelProjectionWorker struct{}
+`,
+		"projection/order_worker.go": `package projection
+
+type OrderProjectionWorker struct{}
+
+func applyOrder(e any) error {
+	switch e.EventName {
+	case "OrderPlaced":
+		return nil
+	}
+	return nil
+}
+`,
+		"main.go": `package main
+
+func main() {
+	workers := []projection.Worker{
+		// esb:inject:projection-workers
+		app.ReadModelProjectionWorker,
+	}
+	_ = workers
+}
+`,
+	})
+
+	m := scanOrFatal(t, dir)
+	if len(m.Projection) != 1 || m.Projection[0].Name != "read_model" {
+		t.Fatalf("projections = %+v, want only read_model", m.Projection)
+	}
+	if !slices.Contains(m.Projection[0].Events, "OrderPlaced") {
+		t.Errorf("read_model events = %v, want OrderPlaced merged in", m.Projection[0].Events)
+	}
+	if len(m.UnregisteredWorker) != 1 || m.UnregisteredWorker[0] != (inspector.UnregisteredWorker{Name: "order", Host: "read_model"}) {
+		t.Errorf("UnregisteredWorker = %+v", m.UnregisteredWorker)
+	}
+}
+
+// TestScanServices_StoreWithKeyAndHelpers: `esb add idempotency` emits through
+// storeWithKey, and commands often store from an unexported helper. Both must
+// count as the command emitting the event.
+func TestScanServices_StoreWithKeyAndHelpers(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"service/order.go": `package service
+
+import "context"
+
+type OrderService struct{ eventRepo any }
+
+func (s *OrderService) Place(ctx context.Context, id, key string) error {
+	agg, _ := s.load(ctx, id)
+	return s.storeWithKey(ctx, agg, "OrderPlaced", nil, key)
+}
+
+func (s *OrderService) Pay(ctx context.Context, id string) error {
+	return s.markPaid(ctx, id)
+}
+
+func (s *OrderService) markPaid(ctx context.Context, id string) error {
+	agg, _ := s.load(ctx, id)
+	return s.store(ctx, agg, "OrderPaid", nil)
+}
+`,
+	})
+
+	m := scanOrFatal(t, dir)
+	if len(m.Service) != 1 {
+		t.Fatalf("services = %+v", m.Service)
+	}
+	got := map[string][]string{}
+	for _, c := range m.Service[0].Commands {
+		got[c.Name] = c.Emits
+	}
+	if !slices.Equal(got["Place"], []string{"OrderPlaced"}) {
+		t.Errorf("Place emits %v, want [OrderPlaced]", got["Place"])
+	}
+	if !slices.Equal(got["Pay"], []string{"OrderPaid"}) {
+		t.Errorf("Pay emits %v, want [OrderPaid] via markPaid", got["Pay"])
+	}
+	if _, ok := got["markPaid"]; ok {
+		t.Error("unexported helper must not become a command node")
+	}
+}
+
+// TestScan_CrossServiceHelpers: a command that stores through an unexported
+// helper of another service produces that service's event, on that service's
+// aggregate. A non-service struct (a resolver) that stores is a command entry
+// of its own, and a handler holding it under any field name links to it.
+func TestScan_CrossServiceHelpers(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"domain/cart.go": `package domain
+
+const CartAggregateName = "cart"
+
+type CartCheckedOut struct{}
+
+type Cart struct{}
+
+func (a *Cart) Apply(e Event) {
+	switch e.EventName {
+	case "CartCheckedOut":
+	}
+}
+`,
+		"service/order.go": `package service
+
+type OrderService struct {
+	eventRepo any
+	carts     *CartService
+}
+
+func (s *OrderService) Place(ctx context.Context, id string) error {
+	if err := s.carts.checkout(ctx, id); err != nil {
+		return err
+	}
+	return s.store(ctx, nil, "OrderPlaced", nil)
+}
+`,
+		"service/cart.go": `package service
+
+type CartService struct{ eventRepo any }
+
+func (s *CartService) checkout(ctx context.Context, id string) error {
+	return s.store(ctx, nil, "CartCheckedOut", nil)
+}
+`,
+		"service/order_resolver.go": `package service
+
+type OrderResolver struct{ orders *OrderService }
+
+func (r *OrderResolver) Pay(ctx context.Context, id string) error {
+	return r.orders.markPaid(ctx, id)
+}
+
+func (s *OrderService) markPaid(ctx context.Context, id string) error {
+	return s.store(ctx, nil, "OrderPaid", nil)
+}
+`,
+		"server/handler/pay_order.go": `package handler
+
+type PayOrderHandler struct{ resolver *service.OrderResolver }
+
+func (h *PayOrderHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	_ = h.resolver.Pay(r.Context(), "id")
+}
+`,
+	})
+
+	m := scanOrFatal(t, dir)
+	svc := map[string]inspector.Service{}
+	for _, s := range m.Service {
+		svc[s.Name] = s
+	}
+
+	place := svc["order"].Commands
+	if len(place) != 1 || place[0].Name != "Place" ||
+		!slices.Equal(place[0].Emits, []string{"OrderPlaced"}) ||
+		!slices.Equal(place[0].Other, []inspector.EventRef{{Aggregate: "cart", Event: "CartCheckedOut"}}) {
+		t.Errorf("order commands = %+v, want Place emitting OrderPlaced + cart/CartCheckedOut", place)
+	}
+	if len(svc["cart"].Commands) != 0 {
+		t.Errorf("cart commands = %+v, want none (checkout is unexported)", svc["cart"].Commands)
+	}
+	res, ok := svc["order_resolver"]
+	if !ok || res.Aggregate != "order" || res.File != "service/order_resolver.go" ||
+		len(res.Commands) != 1 || !slices.Equal(res.Commands[0].Emits, []string{"OrderPaid"}) {
+		t.Errorf("order_resolver = %+v, want Pay emitting OrderPaid on order", res)
+	}
+
+	g := inspector.BuildFlow(m, "cart")
+	edges := map[string]bool{}
+	for _, e := range g.Edges {
+		edges[e.From+" -> "+e.To] = true
+	}
+	// Filtering by cart keeps the order command that stores cart's event.
+	if !edges["command:order.Place -> event:cart/CartCheckedOut"] {
+		t.Errorf("cart view edges = %v, want order.Place -> cart/CartCheckedOut", g.Edges)
+	}
+
+	g = inspector.BuildFlow(m, "")
+	edges = map[string]bool{}
+	for _, e := range g.Edges {
+		edges[e.From+" -> "+e.To] = true
+	}
+	if !edges["handler:pay_order.Handle -> command:order_resolver.Pay"] {
+		t.Errorf("edges = %v, want pay_order.Handle -> order_resolver.Pay", g.Edges)
+	}
+}
+
+// TestScanServices_StoreWrapperIsNotDynamic: store() delegating to
+// storeWithKey(ctx, agg, eventName, …) passes a variable, but the literal was
+// already read where store() is called, so the command is not dynamic.
+func TestScanServices_StoreWrapperIsNotDynamic(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"service/order.go": `package service
+
+type OrderService struct{ eventRepo any }
+
+func (s *OrderService) Place(ctx context.Context, id string) error {
+	return s.store(ctx, nil, "OrderPlaced", nil)
+}
+
+func (s *OrderService) store(ctx context.Context, agg any, eventName string, data any) error {
+	return s.storeWithKey(ctx, agg, eventName, data, "")
+}
+`,
+	})
+	m := scanOrFatal(t, dir)
+	c := m.Service[0].Commands
+	if len(c) != 1 || c[0].Dynamic || !slices.Equal(c[0].Emits, []string{"OrderPlaced"}) {
+		t.Errorf("commands = %+v, want Place emitting OrderPlaced, not dynamic", c)
+	}
+}
+
+// TestBuildFlow_EventStoreLayer: events are written into their aggregate's
+// store node, a method that only loads an aggregate gets a read edge, and a
+// command's own load before storing is not drawn. A handler that only reads
+// is marked as reading the write model.
+func TestBuildFlow_EventStoreLayer(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"service/order.go": `package service
+
+type OrderService struct{ eventRepo domain.EventRepository }
+
+func (s *OrderService) Place(ctx context.Context, id string) error {
+	if _, err := s.load(ctx, id); err != nil {
+		return err
+	}
+	return s.store(ctx, nil, "OrderPlaced", nil)
+}
+
+func (s *OrderService) Get(ctx context.Context, id string) error {
+	_, err := s.load(ctx, id)
+	return err
+}
+
+func (s *OrderService) load(ctx context.Context, id string) (any, error) {
+	return s.eventRepo.Retrieve(ctx, id, "order", 0)
+}
+
+func (s *OrderService) store(ctx context.Context, agg any, name string, data any) error {
+	_, err := s.eventRepo.StoreAtomic(ctx, nil, 0)
+	return err
+}
+`,
+		"server/handler/place_order.go": `package handler
+
+type PlaceOrderHandler struct{ svc *service.OrderService }
+
+func (h *PlaceOrderHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	_ = h.svc.Place(r.Context(), "id")
+}
+`,
+		"server/handler/get_order.go": `package handler
+
+type GetOrderHandler struct{ svc *service.OrderService }
+
+func (h *GetOrderHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	_ = h.svc.Get(r.Context(), "id")
+}
+`,
+	})
+
+	m := scanOrFatal(t, dir)
+	g := inspector.BuildFlow(m, "order")
+	edges := map[string]string{}
+	for _, e := range g.Edges {
+		edges[e.From+" -> "+e.To] = e.Op
+	}
+	for edge, op := range map[string]string{
+		"handler:place_order.Handle -> command:order.Place": "",
+		"handler:get_order.Handle -> command:order.Get":     "",
+		"command:order.Place -> event:order/OrderPlaced":    "",
+		"event:order/OrderPlaced -> store:order":            "write",
+		"command:order.Get -> store:order":                  "read",
+	} {
+		got, ok := edges[edge]
+		if !ok || got != op {
+			t.Errorf("edge %s: op=%q present=%v, want op %q", edge, got, ok, op)
+		}
+	}
+	if _, ok := edges["command:order.Place -> store:order"]; ok {
+		t.Error("a command's own load before storing must not be drawn")
+	}
+	for _, c := range g.Columns {
+		for _, n := range c.Nodes {
+			if n.Label == "get_order.Handle" && n.Sub != "baca write model langsung" {
+				t.Errorf("get_order sub = %q, want read-only marker", n.Sub)
+			}
+			if n.Label == "place_order.Handle" && n.Sub == "baca write model langsung" {
+				t.Error("place_order writes, must not be marked read-only")
+			}
+		}
+	}
+}
+
+// TestBuildFlow_FilterKeepsMultiProjection: a multi-aggregate worker has no
+// single aggregate, yet filtering by one of its aggregates must still show it
+// handling that aggregate's events.
+func TestBuildFlow_FilterKeepsMultiProjection(t *testing.T) {
+	m := inspector.ProjectModel{
+		Aggregate: []inspector.Aggregate{{Name: "order", Events: []string{"OrderPlaced"},
+			EventDetails: []inspector.EventDetail{{Name: "OrderPlaced"}}}},
+		Projection: []inspector.Projection{{Name: "read_model", Multi: true,
+			Aggregates: []string{"cart", "order"}, Events: []string{"OrderPlaced"}}},
+	}
+	g := inspector.BuildFlow(m, "order")
+	found := false
+	for _, e := range g.Edges {
+		if e.From == "event:order/OrderPlaced" && e.To == "projection:read_model" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("filtered edges = %+v, want OrderPlaced -> read_model", g.Edges)
+	}
+}
+
+// TestBuildFlowWith_Filters: several aggregates at once, "problems only" and
+// hiding stub handlers.
+func TestBuildFlowWith_Filters(t *testing.T) {
+	m := inspector.ProjectModel{
+		Aggregate: []inspector.Aggregate{
+			{Name: "order", Events: []string{"OrderPlaced", "OrderLost"},
+				EventDetails: []inspector.EventDetail{{Name: "OrderPlaced"}, {Name: "OrderLost"}}},
+			{Name: "cart", Events: []string{"CartOpened"},
+				EventDetails: []inspector.EventDetail{{Name: "CartOpened"}}},
+			{Name: "user", Events: []string{"UserJoined"},
+				EventDetails: []inspector.EventDetail{{Name: "UserJoined"}}},
+		},
+		Service: []inspector.Service{{Name: "order", Struct: "OrderService", Aggregate: "order",
+			Commands: []inspector.ServiceCommand{{Name: "Place", Emits: []string{"OrderPlaced"}}}}},
+		Handler: []inspector.Handler{
+			{Name: "place_order", Aggregate: "order", Methods: []inspector.HandlerMethod{{Name: "Handle", Calls: []string{"OrderService.Place"}}}},
+			{Name: "todo_order", Aggregate: "order"},
+		},
+		Projection: []inspector.Projection{{Name: "order", Aggregates: []string{"order"}, Events: []string{"OrderPlaced"}}},
+	}
+	ids := func(g inspector.FlowGraph) map[string]bool {
+		out := map[string]bool{}
+		for _, c := range g.Columns {
+			for _, n := range c.Nodes {
+				out[n.ID] = true
+			}
+		}
+		return out
+	}
+
+	two := ids(inspector.BuildFlowWith(m, inspector.FlowOptions{Aggregates: []string{"order", "cart"}}))
+	if !two["event:order/OrderPlaced"] || !two["event:cart/CartOpened"] || two["event:user/UserJoined"] {
+		t.Errorf("order+cart filter nodes = %v", two)
+	}
+
+	stubs := ids(inspector.BuildFlowWith(m, inspector.FlowOptions{HideStubs: true}))
+	if stubs["handler:todo_order."] || !stubs["handler:place_order.Handle"] {
+		t.Errorf("hide stubs nodes = %v", stubs)
+	}
+
+	problems := ids(inspector.BuildFlowWith(m, inspector.FlowOptions{Aggregates: []string{"order"}, Problems: true}))
+	// OrderLost has no producer and no consumer; OrderPlaced is healthy.
+	if !problems["event:order/OrderLost"] || problems["command:order.Place"] {
+		t.Errorf("problems nodes = %v", problems)
 	}
 }

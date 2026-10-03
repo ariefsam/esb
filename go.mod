@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/spf13/cobra v1.9.1
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
 )
 
