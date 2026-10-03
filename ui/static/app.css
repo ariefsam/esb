@@ -640,6 +640,8 @@ label.ack input { margin-top: 3px; accent-color: var(--accent); cursor: pointer;
 .flow-swatch-call { opacity: 0.6; }
 .flow-swatch-write { border-top-color: #ea580c; }
 .flow-swatch-read { border-top: 2px dashed #2563eb; }
+.flow-swatch-rm { border-top: 2px dashed #16a34a; }
+.flow-swatch-rm-write { border-top: 2px solid #dc2626; }
 .flow-swatch-inferred { border-top: 2px dashed var(--fg-mute); opacity: 0.6; }
 .flow-swatch-warn { width: 14px; height: 10px; border: 1.5px solid var(--warn); border-radius: 3px; }
 .flow-zoom { display: inline-flex; gap: 4px; margin-left: auto; }
@@ -738,7 +740,14 @@ p.small, .muted.small { font-size: 12px; }
 .hide-call .flow-edge-call,
 .hide-write .flow-edge-write,
 .hide-read .flow-edge-read,
-.hide-inferred .flow-edge-inferred { display: none; }
+.hide-inferred .flow-edge-inferred,
+.hide-rm .flow-edge-rm:not(.flow-edge-rm-write),
+.hide-rmwrite .flow-edge-rm-write { display: none; }
+
+/* Calls into the read model: a projection function read (green, dashed) or
+   written (red) by a handler or service, outside the projection worker. */
+.flow-edge-rm { stroke: #16a34a; stroke-dasharray: 4 3; opacity: 0.6; }
+.flow-edge-rm-write { stroke: #dc2626; stroke-dasharray: none; opacity: 0.6; }
 
 /* Path highlighting: everything dims except the selected node's path. */
 .is-focused .flow-node { opacity: 0.18; }

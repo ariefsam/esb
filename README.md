@@ -554,6 +554,16 @@ service lain punya edge `op: write` langsung. Akses dilacak dari pemanggilan met
 pada field bertipe `EventRepository` (`Store*` = tulis, lainnya = baca). Handler
 yang hanya membaca ditandai "baca write model langsung".
 
+Projection → query disambung lewat **tabel read model** yang sama: tabel adalah
+tipe `<X>Row` di `projection/` yang punya `TableName()` atau ada di `AutoMigrate`;
+sebuah fungsi dianggap menyentuh tabel bila menyebut tipe row-nya atau nama
+tabelnya di SQL mentah. Fungsi di `projection/` yang menulis (`Create`, `Save`,
+`Update`, `Delete`, `Exec`, …) dianggap "tulis read model", bukan query. Pemanggilan
+`projection.F(...)` langsung dari handler atau service digambar sebagai garis
+"baca read model" / "tulis read model", dan service yang menulis read model
+langsung (di luar projection worker) muncul di Gaps. Bila tabel tidak terbaca,
+graph kembali ke tebakan dari nama row (garis abu putus-putus).
+
 Di halaman `/flow` (`esb ui`):
 
 - Setiap aggregate adalah satu pita horizontal di semua kolom; node tanpa satu

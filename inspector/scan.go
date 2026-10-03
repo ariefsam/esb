@@ -86,6 +86,9 @@ type Projection struct {
 	// case labels of its `switch e.EventName`. Empty means the worker
 	// subscribes to the aggregate but has no case for any event yet.
 	Events []string
+	// Tables are the read-model tables the worker writes, transitively from
+	// its methods and constructor (see scanReadModel).
+	Tables []string
 }
 
 // Handler is one file in server/handler/.
@@ -101,7 +104,12 @@ type Handler struct {
 // Query is one query function in projection/query.go.
 type Query struct {
 	Name      string
-	Aggregate string // best-effort: derived from the row type the function returns
+	Aggregate string // from the tables it reads (see scanReadModel), else the row type it returns
+	// Tables are the read-model tables the function touches, transitively.
+	Tables []string
+	// Writes is true when it changes the read model (Create, Save, Update,
+	// Delete, Exec): a read-model writer, not a query.
+	Writes bool
 }
 
 // WireGraph is the deconstructed wire/wire.go App.
@@ -176,6 +184,9 @@ func Scan(rootDir string) (ProjectModel, error) {
 		return m, err
 	}
 	dropUnregisteredWorkers(&m)
+	if err := scanReadModel(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
+		return m, err
+	}
 	m.Storage = ScanStorage(rootDir)
 
 	return m, nil

@@ -621,3 +621,135 @@ func TestBuildFlowWith_Filters(t *testing.T) {
 		t.Errorf("problems nodes = %v", problems)
 	}
 }
+
+// TestScanReadModel: projections and queries are linked through the tables
+// they share (row types and raw SQL), a function that writes is a read-model
+// writer rather than a query, and handlers and services calling projection
+// functions directly get edges to them.
+func TestScanReadModel(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"domain/order.go": orderDomain,
+		"projection/order_row.go": `package projection
+
+type OrderRow struct{ AggregateID string }
+
+func (OrderRow) TableName() string { return "orders" }
+`,
+		"projection/read_model_worker.go": `package projection
+
+var readModelAggregateNames = []string{"order"}
+
+type ReadModelProjectionWorker struct{ apply func(tx *gorm.DB, e Event) error }
+
+func NewReadModelProjectionWorker() *ReadModelProjectionWorker {
+	return &ReadModelProjectionWorker{apply: applyToReadModel}
+}
+
+func (w *ReadModelProjectionWorker) Run() { _ = w.apply(nil, Event{}) }
+
+func applyToReadModel(tx *gorm.DB, e Event) error { return applyOrder(tx, e) }
+`,
+		"projection/order_worker.go": `package projection
+
+func applyOrder(tx *gorm.DB, e Event) error {
+	switch e.EventName {
+	case "OrderPlaced":
+		return tx.Create(&OrderRow{}).Error
+	}
+	return nil
+}
+`,
+		"projection/query.go": `package projection
+
+func OrderCount(ctx context.Context, db *gorm.DB) (map[string]int64, error) {
+	var n int64
+	err := db.Raw("SELECT COUNT(*) FROM orders").Scan(&n).Error
+	return nil, err
+}
+
+func SyncOrderRow(ctx context.Context, db *gorm.DB, row OrderRow) error {
+	return db.Save(&row).Error
+}
+`,
+		"main.go": `package main
+
+func main() {
+	workers := []projection.Worker{
+		// esb:inject:projection-workers
+		app.ReadModelProjectionWorker,
+	}
+	_ = workers
+}
+`,
+		"service/order.go": `package service
+
+import "example.com/flowtest/projection"
+
+type OrderService struct{ db *gorm.DB }
+
+func (s *OrderService) Fix(ctx context.Context) error {
+	return projection.SyncOrderRow(ctx, s.db, projection.OrderRow{})
+}
+`,
+		"server/handler/fix_order.go": `package handler
+
+type FixOrderHandler struct{ svc *service.OrderService }
+
+func (h *FixOrderHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	_ = h.svc.Fix(r.Context())
+}
+`,
+		"server/handler/order_count.go": `package handler
+
+import "example.com/flowtest/projection"
+
+type OrderCountHandler struct{ db *gorm.DB }
+
+func (h *OrderCountHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	_, _ = projection.OrderCount(r.Context(), h.db)
+}
+`,
+	})
+
+	m := scanOrFatal(t, dir)
+	if len(m.Projection) != 1 || !slices.Equal(m.Projection[0].Tables, []string{"orders"}) {
+		t.Fatalf("projections = %+v, want read_model writing orders", m.Projection)
+	}
+	q := map[string]inspector.Query{}
+	for _, x := range m.Query {
+		q[x.Name] = x
+	}
+	if c := q["OrderCount"]; c.Writes || c.Aggregate != "order" || !slices.Equal(c.Tables, []string{"orders"}) {
+		t.Errorf("OrderCount = %+v, want a read of orders on aggregate order", c)
+	}
+	if !q["SyncOrderRow"].Writes {
+		t.Errorf("SyncOrderRow = %+v, want a writer", q["SyncOrderRow"])
+	}
+
+	g := inspector.BuildFlow(m, "")
+	edges := map[string]inspector.FlowEdge{}
+	for _, e := range g.Edges {
+		edges[e.From+" -> "+e.To] = e
+	}
+	if e, ok := edges["projection:read_model -> query:OrderCount"]; !ok || e.Inferred {
+		t.Errorf("want a solid read_model -> OrderCount edge, got %+v (present %v)", e, ok)
+	}
+	if _, ok := edges["projection:read_model -> query:SyncOrderRow"]; ok {
+		t.Error("a read-model writer is not fed by the projection")
+	}
+	if e := edges["handler:order_count.Handle -> query:OrderCount"]; e.Op != "rm-read" {
+		t.Errorf("handler -> OrderCount op = %q, want rm-read", e.Op)
+	}
+	if e := edges["command:order.Fix -> query:SyncOrderRow"]; e.Op != "rm-write" {
+		t.Errorf("order.Fix -> SyncOrderRow op = %q, want rm-write (edges %v)", e.Op, g.Edges)
+	}
+	found := false
+	for _, gap := range inspector.BuildStats(m).Gaps {
+		if gap.Subject == "service order.Fix" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("want a gap for the service writing the read model directly")
+	}
+}

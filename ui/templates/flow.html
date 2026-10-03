@@ -51,6 +51,8 @@
       <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="call" checked><span class="flow-swatch flow-swatch-call"></span>panggilan / emit</label>
       <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="write" checked><span class="flow-swatch flow-swatch-write"></span>tulis ke store</label>
       <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="read" checked><span class="flow-swatch flow-swatch-read"></span>baca dari store</label>
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="rm" checked><span class="flow-swatch flow-swatch-rm"></span>baca read model</label>
+      <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="rmwrite" checked><span class="flow-swatch flow-swatch-rm-write"></span>tulis read model</label>
       <label class="flow-legend-item"><input type="checkbox" data-edge-toggle="inferred" checked><span class="flow-swatch flow-swatch-inferred"></span>inferensi query</label>
       <span class="flow-legend-item"><span class="flow-swatch flow-swatch-warn"></span>jalur buntu</span>
     </div>
@@ -104,7 +106,7 @@
       <g class="flow-edges">
         {{range .SVG.Edges}}
         <path d="{{.Path}}" data-from="{{.From}}" data-to="{{.To}}"
-              class="flow-edge{{if .Inferred}} flow-edge-inferred{{else if eq .Op "read"}} flow-edge-read{{else if eq .Op "write"}} flow-edge-write{{else}} flow-edge-call{{end}}"
+              class="flow-edge{{if .Inferred}} flow-edge-inferred{{else if eq .Op "read"}} flow-edge-read{{else if eq .Op "write"}} flow-edge-write{{else if eq .Op "rm-read"}} flow-edge-rm{{else if eq .Op "rm-write"}} flow-edge-rm flow-edge-rm-write{{else}} flow-edge-call{{end}}"
               marker-end="url(#flow-arrow)" />
         {{end}}
       </g>
@@ -136,6 +138,8 @@
     Satu pita = satu aggregate; node tanpa satu aggregate tertentu ada di pita "lintas aggregate".
     Klik sebuah kotak (atau cari namanya) untuk menyorot jalurnya dari handler sampai query; buka kodenya
     lewat "Lihat kode" atau klik dua kali. Baca aggregate sendiri sebelum menulis tidak digambar.
+    Projection → query tersambung lewat tabel read model yang sama (solid); garis abu putus-putus hanya
+    dipakai bila tabelnya tidak terbaca.
   </p>
   <div id="flow-code" class="flow-code" hidden>
     <div class="flow-code-head">

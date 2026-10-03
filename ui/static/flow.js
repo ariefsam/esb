@@ -255,7 +255,7 @@
 
   function applyEdgeToggles() {
     if (!svg) return;
-    ["call", "write", "read", "inferred"].forEach(function (kind) {
+    ["call", "write", "read", "rm", "rmwrite", "inferred"].forEach(function (kind) {
       svg.classList.toggle("hide-" + kind, !!hiddenEdges[kind]);
     });
   }

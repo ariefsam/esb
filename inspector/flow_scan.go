@@ -63,6 +63,9 @@ type Service struct {
 type HandlerMethod struct {
 	Name  string   // e.g. "Create"
 	Calls []string // "<Type>.<Method>" for every h.<field>.<Method>(…), sorted
+	// Queries are the projection functions called directly (projection.F(…)),
+	// sorted: the handler reading the read model without a service.
+	Queries []string
 }
 
 // svcMethod is one method declared in package service, as seen by the
@@ -76,6 +79,7 @@ type svcMethod struct {
 	calls      []string // "<Type>.<Method>" keys of methods it calls
 	esRead     bool     // calls a read method on an EventRepository field
 	esWrite    bool     // calls a Store* method on an EventRepository field
+	queries    []string // projection functions it calls directly
 }
 
 // svcStruct is one struct declared in package service.
@@ -142,6 +146,7 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 	}
 
 	for _, file := range files {
+		projPkg := projectionImportName(file)
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -163,6 +168,7 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 				calls:      methodCalls(fn.Body, recvName, recvType, structs[recvType].fields),
 				esRead:     esRead,
 				esWrite:    esWrite,
+				queries:    projectionCalls(fn.Body, projPkg),
 			}
 			order = append(order, key)
 		}
@@ -284,10 +290,13 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 		if !root.exported {
 			continue
 		}
-		reads, writes := map[string]bool{}, map[string]bool{}
+		reads, writes, queries := map[string]bool{}, map[string]bool{}, map[string]bool{}
 		seen := map[string]bool{key: true}
 		var walk func(mm *svcMethod)
 		walk = func(mm *svcMethod) {
+			for _, q := range mm.queries {
+				queries[q] = true
+			}
 			agg := aggregateOf(structs[mm.structName])
 			if agg != "" {
 				if mm.esRead {
@@ -305,7 +314,7 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 			}
 		}
 		walk(root)
-		if len(reads) == 0 && len(writes) == 0 {
+		if len(reads) == 0 && len(writes) == 0 && len(queries) == 0 {
 			continue
 		}
 		st := structs[root.structName]
@@ -319,6 +328,7 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 			Method:  strings.TrimPrefix(key, st.name+"."),
 			Reads:   sortedKeys(reads),
 			Writes:  sortedKeys(writes),
+			Queries: sortedKeys(queries),
 		})
 	}
 	sort.Slice(m.StoreAccess, func(i, j int) bool {
@@ -331,14 +341,16 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 	return nil
 }
 
-// StoreAccess is one exported method in service/ that reaches the event store,
-// directly or through any callee, with the aggregates it reads and writes.
+// StoreAccess is one exported method in service/ that reaches the event store
+// or the read model, directly or through any callee: the aggregates it reads
+// and writes, and the projection functions it calls.
 type StoreAccess struct {
 	Service string // same naming as Service.Name
 	Struct  string // Go type, e.g. "CycleResolver"
 	Method  string
 	Reads   []string // aggregates loaded (Retrieve, LatestSnapshot, FetchAll), sorted
 	Writes  []string // aggregates written (StoreAtomic, StoreSnapshot), sorted
+	Queries []string // projection functions it calls, transitively, sorted
 }
 
 func sortedKeys(set map[string]bool) []string {
@@ -535,6 +547,7 @@ func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dyn
 // any other, such as cycles *service.CycleResolver).
 func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 	fields := serviceFields(file, structName)
+	projPkg := projectionImportName(file)
 	var out []HandlerMethod
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -546,10 +559,11 @@ func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 			continue
 		}
 		calls := serviceCallsIn(fn.Body, recvName, fields)
-		if len(calls) == 0 {
+		queries := projectionCalls(fn.Body, projPkg)
+		if len(calls) == 0 && len(queries) == 0 {
 			continue
 		}
-		out = append(out, HandlerMethod{Name: fn.Name.Name, Calls: calls})
+		out = append(out, HandlerMethod{Name: fn.Name.Name, Calls: calls, Queries: queries})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

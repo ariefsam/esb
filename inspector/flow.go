@@ -49,7 +49,9 @@ type FlowEdge struct {
 	From     string
 	To       string
 	Inferred bool
-	Op       string // edges into the event store: "read" or "write"
+	// Op is set on store and read-model edges: "read"/"write" into the event
+	// store, "rm-read"/"rm-write" for a call into a projection function.
+	Op string
 }
 
 // FlowColumn is one rendered layer, already ordered.
@@ -151,6 +153,8 @@ type flowBuilder struct {
 	methodAggregate map[string]string
 	// emitsInto maps a method node ID → aggregates it emits a known event into.
 	emitsInto map[string]map[string]bool
+	// queries maps a projection function name → its scan result.
+	queries map[string]Query
 }
 
 func newFlowBuilder(m ProjectModel) *flowBuilder {
@@ -165,6 +169,10 @@ func newFlowBuilder(m ProjectModel) *flowBuilder {
 		methods:         map[string]string{},
 		methodAggregate: map[string]string{},
 		emitsInto:       map[string]map[string]bool{},
+		queries:         map[string]Query{},
+	}
+	for _, q := range m.Query {
+		b.queries[q.Name] = q
 	}
 	for _, a := range m.Aggregate {
 		b.declared[a.Name] = map[string]bool{}
@@ -404,6 +412,15 @@ func (b *flowBuilder) eventWarn(aggregate, event string) string {
 // TODO body has no methods, so it gets a single warned placeholder node.
 func (b *flowBuilder) addHandlers() {
 	commands, commandAggregate := b.methods, b.methodAggregate
+	storeMethods := map[string]bool{} // method node ID → it reads or writes the event store
+	for id := range b.emitsInto {
+		storeMethods[id] = true
+	}
+	for _, a := range b.model.StoreAccess {
+		if id := b.methods[a.Struct+"."+a.Method]; id != "" && len(a.Reads)+len(a.Writes) > 0 {
+			storeMethods[id] = true
+		}
+	}
 	writes := map[string]bool{} // method node ID → it writes the store
 	for id, into := range b.emitsInto {
 		if len(into) > 0 {
@@ -433,7 +450,7 @@ func (b *flowBuilder) addHandlers() {
 			warn := ""
 			linked := false
 			aggregate := h.Aggregate
-			readOnly := true
+			readOnly, reachesStore := true, false
 			for _, call := range method.Calls {
 				target, ok := commands[call]
 				if !ok {
@@ -442,16 +459,28 @@ func (b *flowBuilder) addHandlers() {
 				b.link(id, target)
 				linked = true
 				readOnly = readOnly && !writes[target]
+				reachesStore = reachesStore || storeMethods[target]
 				// A handler without the generated svc field (it holds a
 				// resolver, say) takes the aggregate of what it calls.
 				if aggregate == "" {
 					aggregate = commandAggregate[target]
 				}
 			}
+			for _, name := range method.Queries {
+				q, ok := b.queries[name]
+				if !ok {
+					continue
+				}
+				b.edges = append(b.edges, FlowEdge{From: id, To: queryID(name), Op: readModelOp(q)})
+				linked = true
+				if aggregate == "" {
+					aggregate = q.Aggregate
+				}
+			}
 			sub := aggregate
 			if !linked {
 				warn = "calls no known command"
-			} else if readOnly {
+			} else if readOnly && reachesStore {
 				// Only reaches the store to load aggregates: it reads the
 				// write model instead of a projection.
 				sub = "baca write model langsung"
@@ -507,28 +536,75 @@ func (b *flowBuilder) addQueries() {
 	for _, q := range b.model.Query {
 		id := queryID(q.Name)
 		warn := ""
-		linked := false
-		for _, p := range b.model.Projection {
-			for _, agg := range p.Aggregates {
-				if agg == q.Aggregate && q.Aggregate != "" {
-					b.guess(projectionID(p.Name), id)
+		sub := q.Aggregate
+		if q.Writes {
+			// A read-model writer (SyncProfileRow): fed by its caller, not by
+			// a projection, so "no projection feeds it" would be noise.
+			sub = "tulis read model"
+		} else if len(q.Tables) > 0 {
+			// Exact: a projection that writes a table this query reads.
+			linked := false
+			for _, p := range b.model.Projection {
+				if sharesTable(p.Tables, q.Tables) {
+					b.link(projectionID(p.Name), id)
 					linked = true
-					break
 				}
 			}
-		}
-		if !linked {
-			warn = "no projection feeds it"
+			if !linked {
+				warn = "no projection feeds it"
+			}
+		} else {
+			// No table recognised: fall back to the naming guess.
+			linked := false
+			for _, p := range b.model.Projection {
+				if q.Aggregate != "" && contains(p.Aggregates, q.Aggregate) {
+					b.guess(projectionID(p.Name), id)
+					linked = true
+				}
+			}
+			if !linked {
+				warn = "no projection feeds it"
+			}
 		}
 		b.add(FlowNode{
 			ID:        id,
 			Kind:      FlowQuery,
 			Label:     q.Name,
-			Sub:       q.Aggregate,
+			Sub:       sub,
 			Aggregate: q.Aggregate,
 			Warn:      warn,
 		})
 	}
+
+	// Service methods calling projection functions directly.
+	for _, a := range b.model.StoreAccess {
+		mid := b.methods[a.Struct+"."+a.Method]
+		if mid == "" {
+			continue
+		}
+		for _, name := range a.Queries {
+			if q, ok := b.queries[name]; ok {
+				b.edges = append(b.edges, FlowEdge{From: mid, To: queryID(name), Op: readModelOp(q)})
+			}
+		}
+	}
+}
+
+// readModelOp is the edge op for a call into the read model.
+func readModelOp(q Query) string {
+	if q.Writes {
+		return "rm-write"
+	}
+	return "rm-read"
+}
+
+func sharesTable(a, b []string) bool {
+	for _, t := range a {
+		if contains(b, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // flowLayers is the fixed column order and titles of the rendered graph.
@@ -792,6 +868,22 @@ func buildGaps(m ProjectModel, b *flowBuilder) []Gap {
 		handlerFor[h.Aggregate] = true
 		if len(h.Methods) == 0 {
 			infoAt(handlerID(h.Name, ""), "handler "+h.Name, "belum memanggil service — masih body TODO hasil generate")
+		}
+	}
+	queries := map[string]Query{}
+	for _, q := range m.Query {
+		queries[q.Name] = q
+	}
+	for _, a := range m.StoreAccess {
+		var writers []string
+		for _, name := range a.Queries {
+			if queries[name].Writes {
+				writers = append(writers, "projection."+name)
+			}
+		}
+		if len(writers) > 0 {
+			infoAt(commandID(a.Service, a.Method), "service "+a.Service+"."+a.Method,
+				"menulis read model langsung lewat "+strings.Join(writers, ", ")+" — di luar projection worker")
 		}
 	}
 	for _, u := range m.UnregisteredWorker {
