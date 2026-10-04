@@ -45,6 +45,8 @@ Annotations (line comments in your code):
 Exit status is 1 when there is a "warn" finding the scanner could not
 understand; with --strict, also when the flow has a "warn" gap.
 
+Guide: https://github.com/ariefsam/esb/blob/main/docs/flow-guide.md
+
 Examples:
   esb doctor
   esb doctor --strict -o json`,

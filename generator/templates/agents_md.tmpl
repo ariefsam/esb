@@ -84,6 +84,28 @@ Set via `EVENT_STORE_MODE` in `.env`:
 `esb` CLI with values from `.env`; afterwards set `EVENT_STORE_MODE=esb-server`
 by hand). `make migrate-to-embedded` refuses a non-empty target unless `FORCE=1`.
 
+## Checking the code flow
+
+`esb ui` (page `/flow`), `esb show flow -o json` and `esb doctor` read this
+project's source and draw handler → service method → event → event store →
+projection → query. Run `esb doctor` after changing commands, handlers,
+projections or queries: it lists what esb could not understand (with
+file:line and the fix) and flow gaps such as an event no projection handles.
+`esb doctor --strict` exits 1 on warnings, for CI.
+
+When code is correct but esb cannot infer it, state it with an annotation in
+the function's (or type's) doc comment instead of reshaping the code:
+
+- `// esb:emits EventA, other-aggregate/EventB` — events a service method
+  stores when the name is computed at runtime.
+- `// esb:reads aggregate` / `// esb:writes aggregate` — event store access
+  esb cannot trace.
+- `// esb:no-projection` — in `domain/<aggregate>.go` (whole aggregate) or on
+  an event type: no projection needed, on purpose.
+- `// esb:ignore` — leave a handler, service or projection function out.
+
+Guide: https://github.com/ariefsam/esb/blob/main/docs/flow-guide.md
+
 ## Extending this project
 
 This project is meant to be extended using the `esb` CLI (`esb add

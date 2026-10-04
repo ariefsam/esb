@@ -16,17 +16,22 @@ var showFlowCmd = &cobra.Command{
 	Use:   "flow [aggregate-name]",
 	Short: "Print the code flow graph (handler → method → event → event store → projection → query) as YAML or JSON",
 	Long: `Machine-readable form of the 'esb ui' /flow page. The graph is derived
-from the project's source, not from stored events. Edges marked inferred:
-true come from a naming convention (projection → query), not a call.
-Stats always cover the whole project; the optional aggregate only narrows
-nodes and edges.
+from the project's source, not from stored events.
 
 Layers: handler → service method → event → event store → projection →
-query. Edges into the event store carry op: read or write.
+query. Edges into the event store carry op: read or write; calls into the
+read model carry op: rm-read or rm-write. A projection is linked to a query
+when it writes a table the query reads; inferred: true marks the fallback
+guess from names, used only when no table is recognised.
+
+Stats always cover the whole project; the optional aggregate only narrows
+nodes and edges. What the scanner could not understand is reported by
+'esb doctor'. Guide: https://github.com/ariefsam/esb/blob/main/docs/flow-guide.md
 
 Examples:
   esb show flow
-  esb show flow user-settings -o json | jq '.gaps'`,
+  esb show flow user-settings -o json | jq '.gaps'
+`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if showFlowOutput != "yaml" && showFlowOutput != "json" {

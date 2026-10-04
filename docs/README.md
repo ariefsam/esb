@@ -1,7 +1,13 @@
 # docs
 
 Catatan desain dan perencanaan `esb`. Dokumentasi pemakaian ada di
-[README.md](../README.md).
+[README.md](../README.md) dan panduan di bawah.
+
+## Panduan pemakaian
+
+| Dokumen | Isi |
+|---|---|
+| [flow-guide.md](flow-guide.md) | `esb ui` `/flow`, `esb show flow`, `esb doctor`: alur kerja, cara membaca graph, konvensi agar kode terbaca, anotasi `esb:` |
 
 ## ideas/ — masih relevan
 

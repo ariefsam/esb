@@ -517,6 +517,9 @@ Wire Graph
 
 ### `esb doctor`
 
+> Panduan lengkap (alur kerja, cara membaca graph, konvensi agar kode terbaca):
+> [docs/flow-guide.md](docs/flow-guide.md).
+
 Laporan apa yang **tidak dipahami** scanner `esb` (yang membuat `esb show flow`
 dan halaman `/flow` kurang lengkap), terpisah dari **celah alur** (yang memang belum
 ada di proyek). Setiap temuan punya `file:line` dan cara memperbaikinya.
@@ -562,6 +565,8 @@ esb show storage
 ```
 
 ### `esb show flow`
+
+Lihat juga [docs/flow-guide.md](docs/flow-guide.md).
 
 Graph alur kode (handler → service method → event → event store → projection → query) sebagai
 YAML (default) atau JSON. Dibaca dari source proyek, bukan dari event yang
@@ -662,7 +667,9 @@ event store tidak disentuh.
 | `GET`  | `/commands` | katalog command + form (dikelompokkan: Scaffold / Recipes / Evolusi / Proyek) |
 | `POST` | `/commands/execute` | validasi + jalankan satu command, redirect ke run detail |
 | `GET`  | `/commands/runs/{id}` | status, stdout/stderr, exit code |
-| `GET`  | `/flow` | graf alur write→read (handler → command → event → projection worker → query) dari analisis AST; edge worker→query ditandai inferensi (garis putus-putus) |
+| `GET`  | `/flow` | graf alur dari analisis AST: handler → service method → event → event store → projection → query, plus temuan `esb doctor` dan Gaps. Lihat [panduan Flow](docs/flow-guide.md) |
+| `GET`  | `/flow.json` | data graph yang sama dengan `esb show flow -o json` (`?aggregate=` opsional) |
+| `GET`  | `/flow/source?file=` | isi file Go untuk viewer kode; hanya file yang dirujuk node atau temuan doctor |
 | `GET`  | `/storage` | mode event store, event/snapshot count per aggregate, isi tabel locks (embedded) |
 | `GET`, `POST` | `/storage/migrate` | form + eksekusi migrasi embedded ↔ esb-server |
 | `GET`  | `/static/*` | CSS dan helper JS (embedded di binary, offline) |
