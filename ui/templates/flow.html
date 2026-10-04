@@ -153,6 +153,28 @@
   <script src="/static/flow.js"></script>
 </section>
 
+{{if .Project.Diagnostics}}
+<section>
+  <h2>Tidak dipahami scanner ({{len .Project.Diagnostics}})</h2>
+  <p class="muted small">
+    Bagian kode yang tidak bisa dibaca esb, jadi bisa membuat graph di atas kurang lengkap. Beda dengan Gaps
+    di bawah, yang berarti alurnya memang belum ada. Daftar yang sama keluar dari <code>esb doctor</code>.
+  </p>
+  <table>
+    <thead><tr><th>Level</th><th>Lokasi</th><th>Masalah &amp; perbaikan</th></tr></thead>
+    <tbody>
+    {{range .Project.Diagnostics}}
+      <tr>
+        <td><span class="badge badge-{{.Level}}">{{.Level}}</span></td>
+        <td><a href="#flow-code" data-code-file="{{.File}}" data-code-line="{{.Line}}"><code>{{.File}}{{if .Line}}:{{.Line}}{{end}}</code></a></td>
+        <td>{{.Message}}<br><span class="muted small">→ {{.Hint}}</span></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
 {{if .Stats.Gaps}}
 <section>
   <h2>Gaps ({{len .Stats.Gaps}})</h2>

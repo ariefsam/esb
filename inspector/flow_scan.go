@@ -66,6 +66,7 @@ type HandlerMethod struct {
 	// Queries are the projection functions called directly (projection.F(…)),
 	// sorted: the handler reading the read model without a service.
 	Queries []string
+	Line    int // declaration line in the handler file
 }
 
 // svcMethod is one method declared in package service, as seen by the
@@ -75,11 +76,14 @@ type svcMethod struct {
 	exported   bool
 	emits      []string
 	dynamic    bool
-	found      bool     // the body calls store()/storeWithKey() itself
-	calls      []string // "<Type>.<Method>" keys of methods it calls
-	esRead     bool     // calls a read method on an EventRepository field
-	esWrite    bool     // calls a Store* method on an EventRepository field
-	queries    []string // projection functions it calls directly
+	found      bool       // the body calls store()/storeWithKey() itself
+	calls      []string   // "<Type>.<Method>" keys of methods it calls
+	esRead     bool       // calls a read method on an EventRepository field
+	esWrite    bool       // calls a Store* method on an EventRepository field
+	queries    []string   // projection functions it calls directly
+	otherEmits []EventRef // esb:emits entries naming another aggregate
+	annReads   []string   // esb:reads aggregates
+	annWrites  []string   // esb:writes aggregates
 }
 
 // svcStruct is one struct declared in package service.
@@ -117,13 +121,15 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 	methods := map[string]*svcMethod{} // "<Type>.<Method>"
 	var order []string                 // method keys in file/declaration order
 	var files []*ast.File
+	fsets := map[*ast.File]*token.FileSet{}
+	fileNames := map[*ast.File]string{}
 
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, _, err := parseGoFile(filepath.Join(dir, name))
+		file, fset, err := parseGoFile(filepath.Join(dir, name))
 		if err != nil {
 			return err
 		}
@@ -131,6 +137,8 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 			continue
 		}
 		base := strings.TrimSuffix(name, ".go")
+		fsets[file] = fset
+		fileNames[file] = "service/" + name
 		primary, _ := declaredStructWithSuffix(file, "Service")
 		for _, st := range structTypes(file) {
 			structs[st.name] = &svcStruct{
@@ -156,7 +164,28 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 			if !ok || structs[recvType] == nil {
 				continue
 			}
+			ann := annotationsOf(fn.Doc)
+			if ann.has("ignore") {
+				continue
+			}
 			emits, dynamic, found := storedEventNames(fn.Body, recvName)
+			var otherEmits []EventRef
+			if ann.has("emits") {
+				// Declared events replace the guess: whatever the body passes
+				// to store(), these are what it stores.
+				for _, e := range ann["emits"] {
+					if agg, ev, ok := strings.Cut(e, "/"); ok {
+						otherEmits = append(otherEmits, EventRef{Aggregate: agg, Event: ev})
+					} else if !contains(emits, e) {
+						emits = append(emits, e)
+					}
+				}
+				dynamic, found = false, true
+			} else if dynamic && !isStoreMethod(recvType+"."+fn.Name.Name) {
+				m.diag("warn", "dynamic-event", fileNames[file], fsets[file].Position(fn.Pos()).Line,
+					recvType+"."+fn.Name.Name+" menyimpan event dengan nama yang dihitung saat runtime, jadi event-nya tidak diketahui",
+					"tambahkan // esb:emits NamaEvent[, NamaEvent2] di atas method ini")
+			}
 			esRead, esWrite := eventStoreOps(fn.Body, recvName, structs[recvType].repos)
 			key := recvType + "." + fn.Name.Name
 			methods[key] = &svcMethod{
@@ -168,6 +197,9 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 				calls:      methodCalls(fn.Body, recvName, recvType, structs[recvType].fields),
 				esRead:     esRead,
 				esWrite:    esWrite,
+				otherEmits: otherEmits,
+				annReads:   ann["reads"],
+				annWrites:  ann["writes"],
 				queries:    projectionCalls(fn.Body, projPkg),
 			}
 			order = append(order, key)
@@ -202,6 +234,12 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 			agg := aggregateOf(structs[mm.structName])
 			for _, e := range mm.emits {
 				ref := EventRef{Aggregate: agg, Event: e}
+				if !emitted[ref] {
+					emitted[ref] = true
+					refs = append(refs, ref)
+				}
+			}
+			for _, ref := range mm.otherEmits {
 				if !emitted[ref] {
 					emitted[ref] = true
 					refs = append(refs, ref)
@@ -305,6 +343,12 @@ func scanServices(dir string, aggregateNames map[string]string, m *ProjectModel)
 				if mm.esWrite {
 					writes[agg] = true
 				}
+			}
+			for _, a := range mm.annReads {
+				reads[a] = true
+			}
+			for _, a := range mm.annWrites {
+				writes[a] = true
 			}
 			for _, c := range mm.calls {
 				if callee, ok := methods[c]; ok && !seen[c] {
@@ -545,7 +589,7 @@ func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dyn
 // handlerMethods returns the exported methods on *structName and the service
 // methods each calls through a *service.<T> field (the generated svc field or
 // any other, such as cycles *service.CycleResolver).
-func handlerMethods(file *ast.File, structName string) []HandlerMethod {
+func handlerMethods(file *ast.File, fset *token.FileSet, structName string) []HandlerMethod {
 	fields := serviceFields(file, structName)
 	projPkg := projectionImportName(file)
 	var out []HandlerMethod
@@ -555,7 +599,7 @@ func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 			continue
 		}
 		recvName, recvType, ok := receiverOf(fn)
-		if !ok || recvType != structName {
+		if !ok || recvType != structName || annotationsOf(fn.Doc).has("ignore") {
 			continue
 		}
 		calls := serviceCallsIn(fn.Body, recvName, fields)
@@ -563,7 +607,10 @@ func handlerMethods(file *ast.File, structName string) []HandlerMethod {
 		if len(calls) == 0 && len(queries) == 0 {
 			continue
 		}
-		out = append(out, HandlerMethod{Name: fn.Name.Name, Calls: calls, Queries: queries})
+		out = append(out, HandlerMethod{
+			Name: fn.Name.Name, Calls: calls, Queries: queries,
+			Line: fset.Position(fn.Pos()).Line,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

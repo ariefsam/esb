@@ -515,6 +515,42 @@ Wire Graph
   |     handler.NewPlaceOrderHandler(...)
 ```
 
+### `esb doctor`
+
+Laporan apa yang **tidak dipahami** scanner `esb` (yang membuat `esb show flow`
+dan halaman `/flow` kurang lengkap), terpisah dari **celah alur** (yang memang belum
+ada di proyek). Setiap temuan punya `file:line` dan cara memperbaikinya.
+
+| Kode | Arti | Perbaikan |
+|---|---|---|
+| `parse-error` | file Go tidak bisa di-parse, jadi dilewati | perbaiki syntax-nya |
+| `dynamic-event` | `store()` dipanggil dengan nama event non-literal | `// esb:emits NamaEvent` di atas method |
+| `handler-unknown-call` | handler memanggil method yang tidak menyentuh event store maupun read model | `// esb:ignore` di handler, atau `// esb:reads` / `// esb:writes` di method service |
+| `query-no-table` | fungsi di `projection/` tanpa tabel yang dikenali | pakai tipe `<X>Row` dengan `TableName()` |
+
+```bash
+esb doctor                 # exit 1 bila ada temuan "warn" yang tidak dipahami
+esb doctor --strict        # juga gagal untuk celah alur "warn" (untuk CI)
+esb doctor -o json
+```
+
+Daftar yang sama tampil di halaman `/flow` (bagian "Tidak dipahami scanner";
+klik lokasinya untuk membuka kode).
+
+#### Anotasi
+
+Komentar di kode proyek yang mengalahkan tebakan scanner:
+
+```go
+// esb:emits OrderPlaced, cart/CartClosed   // method service: event yang disimpan
+                                            // (aggregate/Event untuk aggregate lain)
+// esb:reads budget-cycle                   // method service: aggregate yang dibaca
+// esb:writes envelope                      // method service: aggregate yang ditulis
+// esb:no-projection                        // di file domain: aggregate ini sengaja tanpa
+                                            // projection; di atas tipe event: event itu saja
+// esb:ignore                               // handler/service/projection: abaikan di flow
+```
+
 ### `esb show storage`
 
 Detail event store proyek: mode, DSN/ESB URL, jumlah event & snapshot per

@@ -39,6 +39,8 @@ type ProjectModel struct {
 	Handler     []Handler
 	Service     []Service     // command services in service/, sorted by file name
 	StoreAccess []StoreAccess // exported service methods that reach the event store
+	// Diagnostics are what the scanner could not understand (see diagnostics.go).
+	Diagnostics []Diagnostic
 	Query       []Query
 	Wire        WireGraph
 	Migrate     []string // GORM models in projection/db.go AutoMigrate
@@ -55,6 +57,8 @@ type Aggregate struct {
 	FileName     string // snake_case file name (without .go), used to identify the root struct
 	Events       []string
 	EventDetails []EventDetail
+	// NoProjection lists events marked // esb:no-projection ("*" = all).
+	NoProjection []string
 }
 
 // EventDetail describes one event's fields, extracted from its
@@ -110,6 +114,8 @@ type Query struct {
 	// Writes is true when it changes the read model (Create, Save, Update,
 	// Delete, Exec): a read-model writer, not a query.
 	Writes bool
+	File   string // project-relative declaration file
+	Line   int
 }
 
 // WireGraph is the deconstructed wire/wire.go App.
@@ -187,6 +193,11 @@ func Scan(rootDir string) (ProjectModel, error) {
 	if err := scanReadModel(filepath.Join(rootDir, "projection"), aggregateNames, &m); err != nil {
 		return m, err
 	}
+	if err := applyDomainAnnotations(filepath.Join(rootDir, "domain"), &m); err != nil {
+		return m, err
+	}
+	diagnoseSyntax(rootDir, &m)
+	diagnoseFlow(&m)
 	m.Storage = ScanStorage(rootDir)
 
 	return m, nil
@@ -530,7 +541,7 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 			continue
 		}
 		handlerName := strings.TrimSuffix(name, ".go")
-		file, _, err := parseGoFile(filepath.Join(dir, name))
+		file, fset, err := parseGoFile(filepath.Join(dir, name))
 		if err != nil {
 			return err
 		}
@@ -545,7 +556,7 @@ func scanHandlers(dir string, aggregateNames map[string]string, m *ProjectModel)
 		}
 		methods := []HandlerMethod(nil)
 		if structName, ok := declaredStructWithSuffix(file, "Handler"); ok {
-			methods = handlerMethods(file, structName)
+			methods = handlerMethods(file, fset, structName)
 		}
 		m.Handler = append(m.Handler, Handler{Name: handlerName, Aggregate: agg, Methods: methods})
 	}

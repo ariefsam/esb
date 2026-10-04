@@ -221,6 +221,12 @@
       select(n.getAttribute("data-id"));
       return;
     }
+    var code = e.target.closest && e.target.closest("[data-code-file]");
+    if (code) {
+      e.preventDefault();
+      showCode(code.getAttribute("data-code-file"), parseInt(code.getAttribute("data-code-line"), 10) || 1);
+      return;
+    }
     var link = e.target.closest && e.target.closest("[data-focus]");
     if (link) {
       e.preventDefault();

@@ -29,12 +29,20 @@ func AttachSources(m ProjectModel, root string, g *FlowGraph) {
 	}
 }
 
-// SourceFiles returns every file some flow node points at. The UI serves
-// only these, so the source endpoint cannot be used to read arbitrary files.
+// SourceFiles returns every file some flow node or diagnostic points at. The
+// UI serves only these, so the source endpoint cannot be used to read
+// arbitrary files.
 func SourceFiles(m ProjectModel, root string) map[string]bool {
 	g := BuildFlow(m, "")
 	AttachSources(m, root, &g)
 	files := map[string]bool{}
+	// Diagnostics point at files too (a file that does not parse is in no
+	// node), and they are all inside the scanned folders.
+	for _, d := range m.Diagnostics {
+		if d.File != "" {
+			files[d.File] = true
+		}
+	}
 	for _, c := range g.Columns {
 		for _, n := range c.Nodes {
 			if n.Source.File != "" {

@@ -40,6 +40,7 @@ func scanReadModel(dir string, aggregateNames map[string]string, m *ProjectModel
 	type fileAST struct {
 		base string
 		f    *ast.File
+		fset *token.FileSet
 	}
 	var files []fileAST
 	for _, e := range entries {
@@ -47,12 +48,12 @@ func scanReadModel(dir string, aggregateNames map[string]string, m *ProjectModel
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		f, _, err := parseGoFile(filepath.Join(dir, name))
+		f, fset, err := parseGoFile(filepath.Join(dir, name))
 		if err != nil {
 			return err
 		}
 		if f != nil {
-			files = append(files, fileAST{base: strings.TrimSuffix(name, ".go"), f: f})
+			files = append(files, fileAST{base: strings.TrimSuffix(name, ".go"), f: f, fset: fset})
 		}
 	}
 
@@ -100,6 +101,8 @@ func scanReadModel(dir string, aggregateNames map[string]string, m *ProjectModel
 	// Functions: key is "Name" or "Type.Method".
 	type fnInfo struct {
 		file    string
+		line    int
+		ignore  bool
 		touches map[string]bool
 		writes  bool
 		refs    []string
@@ -127,7 +130,12 @@ func scanReadModel(dir string, aggregateNames map[string]string, m *ProjectModel
 				}
 				key = recvType + "." + fn.Name.Name
 			}
-			info := &fnInfo{file: fa.base, touches: map[string]bool{}}
+			info := &fnInfo{
+				file:    fa.base,
+				line:    fa.fset.Position(fn.Pos()).Line,
+				ignore:  annotationsOf(fn.Doc).has("ignore"),
+				touches: map[string]bool{},
+			}
 			ast.Inspect(fn, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.Ident:
@@ -222,8 +230,20 @@ func scanReadModel(dir string, aggregateNames map[string]string, m *ProjectModel
 	for _, a := range aggregateNames {
 		realAggregate[a] = true
 	}
+	kept := m.Query[:0]
+	for _, q := range m.Query {
+		if info, ok := funcs[q.Name]; ok && info.ignore {
+			continue
+		}
+		kept = append(kept, q)
+	}
+	m.Query = kept
 	for i := range m.Query {
 		q := &m.Query[i]
+		if info, ok := funcs[q.Name]; ok {
+			q.File = "projection/" + info.file + ".go"
+			q.Line = info.line
+		}
 		touched := map[string]bool{}
 		writes := false
 		closure([]string{q.Name}, func(info *fnInfo) {

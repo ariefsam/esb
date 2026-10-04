@@ -201,6 +201,17 @@ func newFlowBuilder(m ProjectModel) *flowBuilder {
 	return b
 }
 
+// noProjection reports an event marked // esb:no-projection: having no
+// consumer is intended, not a dead end.
+func (b *flowBuilder) noProjection(aggregate, event string) bool {
+	for _, a := range b.model.Aggregate {
+		if a.Name == aggregate {
+			return a.skipsProjection(event)
+		}
+	}
+	return false
+}
+
 func (b *flowBuilder) mark(set map[string]map[string]bool, aggregate, event string) {
 	if set[aggregate] == nil {
 		set[aggregate] = map[string]bool{}
@@ -395,7 +406,7 @@ func (b *flowBuilder) addEvents() {
 // the scanner genuinely cannot tell and a warning would be noise.
 func (b *flowBuilder) eventWarn(aggregate, event string) string {
 	produced := b.emitted[aggregate][event] || b.dynamic[aggregate]
-	consumed := b.consumed[aggregate][event]
+	consumed := b.consumed[aggregate][event] || b.noProjection(aggregate, event)
 	switch {
 	case !produced && !consumed:
 		return "no producer, no consumer"
@@ -842,7 +853,7 @@ func BuildStats(m ProjectModel) Stats {
 			if !produced {
 				s.UnproducedEvents++
 			}
-			if !b.consumed[a.Name][e] {
+			if !b.consumed[a.Name][e] && !a.skipsProjection(e) {
 				s.UnconsumedEvents++
 			}
 		}
@@ -918,7 +929,7 @@ func buildGaps(m ProjectModel, b *flowBuilder) []Gap {
 		if !commandFor[a.Name] {
 			info("aggregate "+a.Name, "belum punya service command")
 		}
-		if !projectionFor[a.Name] {
+		if !projectionFor[a.Name] && !a.skipsProjection("*") {
 			info("aggregate "+a.Name, "belum punya projection")
 		}
 		for _, e := range a.Events {
