@@ -71,13 +71,15 @@ func (t *Tx) Append(path, content string) error {
 }
 
 // Contains reports whether the staged (or on-disk) content of path contains
-// needle. Used to guard against double-injection within the transaction.
+// needle as a whole token run, never as part of a longer identifier (see
+// containsIdent). Used to guard against double-injection within the
+// transaction.
 func (t *Tx) Contains(path, needle string) (bool, error) {
 	f, err := t.get(path)
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(f.content, needle), nil
+	return containsIdent(f.content, needle), nil
 }
 
 // InjectAfterMarker stages an insertion after marker in path.

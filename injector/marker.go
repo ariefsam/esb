@@ -10,8 +10,13 @@ package injector
 import (
 	"fmt"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // injectAfterMarker inserts code on the line immediately after the first
@@ -33,25 +38,59 @@ func injectAfterMarker(content, marker, code string) (string, error) {
 	return content[:insertAt] + code + "\n" + content[insertAt:], nil
 }
 
-// ensureImport adds a quoted importPath to the import block of content if not
-// already present. Presence is an exact match of the quoted full path. This is
-// the pure-string core shared by the file API and Tx.
+// ensureImport adds importPath to content's imports if no import of that path
+// exists yet. Presence and placement both come from the parsed import
+// declarations, so a path that only appears in a comment or a string does not
+// count, a ")" inside the import block cannot misplace the insertion, and a
+// file with a single-line import or none at all still gets one. This is the
+// pure core shared by the file API and Tx.
 func ensureImport(content, importPath string) (string, error) {
-	quoted := `"` + importPath + `"`
-	if strings.Contains(content, quoted) {
-		return content, nil
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "", content, parser.ImportsOnly)
+	if err != nil {
+		return "", fmt.Errorf("parse imports: %w", err)
 	}
-
-	if idx := strings.Index(content, "import ("); idx != -1 {
-		closeIdx := strings.Index(content[idx:], ")")
-		if closeIdx == -1 {
-			return "", fmt.Errorf("malformed import block")
+	for _, imp := range f.Imports {
+		if p, err := strconv.Unquote(imp.Path.Value); err == nil && p == importPath {
+			return content, nil
 		}
-		insertAt := idx + closeIdx // before the closing paren
-		return content[:insertAt] + "\t" + quoted + "\n" + content[insertAt:], nil
 	}
+	return addImport(content, importSpec{path: importPath})
+}
 
-	return "", fmt.Errorf("no import block found")
+// containsIdent reports whether needle occurs in content as a whole token
+// run: an occurrence only counts when it is not glued to more identifier
+// characters on either side where the needle itself starts or ends with one.
+// So "OrderProjectionWorker" does not match inside
+// "PurchaseOrderProjectionWorker", and "orderSvc :=" does not match inside
+// "reorderSvc :=". Comments are searched too, on purpose: generated route
+// hints are commented-out TODO lines, and a guard that skipped comments would
+// inject them again on every run.
+func containsIdent(content, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	first, _ := utf8.DecodeRuneInString(needle)
+	last, _ := utf8.DecodeLastRuneInString(needle)
+	for from := 0; ; {
+		i := strings.Index(content[from:], needle)
+		if i == -1 {
+			return false
+		}
+		start := from + i
+		end := start + len(needle)
+		before, _ := utf8.DecodeLastRuneInString(content[:start])
+		after, _ := utf8.DecodeRuneInString(content[end:])
+		if (!isIdentRune(first) || start == 0 || !isIdentRune(before)) &&
+			(!isIdentRune(last) || end == len(content) || !isIdentRune(after)) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+func isIdentRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // InjectAfterMarker finds the first occurrence of marker in file and inserts
@@ -84,14 +123,14 @@ func EnsureImport(path, importPath string) error {
 	return writeFormatted(path, result)
 }
 
-// AlreadyContains reports whether path contains the given string. Used to
-// guard against double-injection.
+// AlreadyContains reports whether path contains needle as a whole token run
+// (see containsIdent). Used to guard against double-injection.
 func AlreadyContains(path, needle string) (bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(string(src), needle), nil
+	return containsIdent(string(src), needle), nil
 }
 
 // writeFormatted writes content to path, running gofmt if it is a .go file.
