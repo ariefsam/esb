@@ -1,5 +1,7 @@
 // Package injector modifies existing generated files by locating marker
-// comments and inserting code snippets at the right position.
+// comments and inserting code snippets at the right position. Inject (see
+// Target in locate.go) also finds the Go construct a marker belongs to, so a
+// deleted or moved marker no longer stops generation.
 //
 // The file-path functions (InjectAfterMarker, EnsureImport, AlreadyContains)
 // operate on one file at a time and write immediately. For multi-file edits

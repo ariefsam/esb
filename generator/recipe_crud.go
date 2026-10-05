@@ -106,7 +106,7 @@ func wireCRUD(tx *injector.Tx, moduleName string, data CRUDData, actions *[]stri
 		if ok, err := tx.Contains("server/routes.go", handlerType+"."+method); err != nil {
 			return err
 		} else if !ok {
-			if err := tx.InjectAfterMarker("server/routes.go", "// esb:inject:routes", route); err != nil {
+			if err := tx.Inject("server/routes.go", injector.Routes, route); err != nil {
 				return err
 			}
 		}

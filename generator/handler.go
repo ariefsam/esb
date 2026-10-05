@@ -47,7 +47,7 @@ func AddHandler(handlerName, aggregateName string) error {
 	if ok, err := tx.Contains("server/routes.go", data.HandlerNamePascal+"Handler"); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("server/routes.go", "// esb:inject:routes", routeEntry); err != nil {
+		if err := tx.Inject("server/routes.go", injector.Routes, routeEntry); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  server/routes.go")
@@ -68,13 +68,13 @@ func AddHandler(handlerName, aggregateName string) error {
 		return err
 	} else if !ok {
 		varName := lcFirst(data.HandlerNamePascal) + "Handler"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+handlerField+" *handler."+handlerField); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppFields, "\t"+handlerField+" *handler."+handlerField); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+varName+" := handler.New"+data.HandlerNamePascal+"Handler("+svcVar+")"); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppInit, "\t"+varName+" := handler.New"+data.HandlerNamePascal+"Handler("+svcVar+")"); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+handlerField+": "+varName+","); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppReturnFields, "\t\t"+handlerField+": "+varName+","); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  wire/wire.go")
@@ -90,7 +90,7 @@ func AddHandler(handlerName, aggregateName string) error {
 		return err
 	} else if !ok {
 		svcInit := "\t" + svcVar + " := service.New" + data.AggregateNamePascal + "Service(eventRepo)"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", svcInit); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppServices, svcInit); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  wire/wire.go (service)")

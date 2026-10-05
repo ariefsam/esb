@@ -60,7 +60,7 @@ func AddProjection(projectionName string, aggregateNames []string) error {
 	if ok, err := tx.Contains("projection/db.go", data.ProjectionNamePascal+"Row{}"); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", rowEntry); err != nil {
+		if err := tx.Inject("projection/db.go", injector.AutomigrateModels, rowEntry); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  projection/db.go")
@@ -72,13 +72,13 @@ func AddProjection(projectionName string, aggregateNames []string) error {
 		return err
 	} else if !ok {
 		workerVar := lcFirst(data.ProjectionNamePascal) + "Worker"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+workerType+" *projection."+workerType); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppFields, "\t"+workerType+" *projection."+workerType); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+workerVar+" := projection.New"+workerType+"(eventRepo, db)"); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppInit, "\t"+workerVar+" := projection.New"+workerType+"(eventRepo, db)"); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+workerType+": "+workerVar+","); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppReturnFields, "\t\t"+workerType+": "+workerVar+","); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  wire/wire.go")
@@ -88,7 +88,7 @@ func AddProjection(projectionName string, aggregateNames []string) error {
 	if ok, err := tx.Contains("main.go", workerType); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("main.go", "// esb:inject:projection-workers", "\t\tapp."+workerType+","); err != nil {
+		if err := tx.Inject("main.go", injector.ProjectionWorkers, "\t\tapp."+workerType+","); err != nil {
 			return err
 		}
 		actions = append(actions, "  update  main.go")

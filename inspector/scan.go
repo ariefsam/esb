@@ -6,10 +6,12 @@
 // Declaration-based facts (aggregates, events, handlers, queries, projection
 // aggregate lists) are recovered with go/ast, so the scanner is indifferent to
 // gofmt spacing and comment wording and never treats an unrelated struct as an
-// event. The few marker-anchored blocks the generator injects into hand-shaped
-// slices (wire App fields/init, AutoMigrate models, main.go workers) are still
-// read by locating their `// esb:inject:*` markers, because there the contract
-// is precisely "what was injected after this marker", not a declaration.
+// event. The few blocks the generator injects into hand-shaped slices (wire
+// App fields/init, AutoMigrate models, main.go workers) are read after their
+// `// esb:inject:*` markers, because there the contract is "what was injected
+// after this marker", not a declaration. When a marker is gone, the generator
+// injects into the construct it sat in (injector/targets.go), so the scanner
+// reads that construct instead, keeping only the kinds of entry esb injects.
 package inspector
 
 import (
@@ -27,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ariefsam/esb/injector"
 	"github.com/ariefsam/esb/naming"
 )
 
@@ -934,8 +937,8 @@ var initLineRegex = regexp.MustCompile(`^\s*([a-z][A-Za-z0-9]*)\s*:=\s*([\w\.]+)
 // scanWire parses wire/wire.go into three lists it stitches back together
 // via PascalCase names: declared App fields, init() locals, and the
 // Node mapping each local to the constructor that built it. These live in
-// hand-shaped regions the generator injects into after `// esb:inject:*`
-// markers, so they are read by marker block rather than by declaration.
+// hand-shaped regions the generator injects into, so they are read by
+// readTarget rather than by declaration.
 func scanWire(path string, m *ProjectModel) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -947,7 +950,7 @@ func scanWire(path string, m *ProjectModel) error {
 	text := string(src)
 
 	fieldsByPascal := map[string]WireNode{}
-	for _, line := range readMarkerBlock(text, "// esb:inject:app-fields") {
+	for _, line := range readTarget(text, injector.AppFields, injectedField) {
 		if mm := fieldDeclRegex.FindStringSubmatch(line); mm != nil {
 			fieldsByPascal[mm[1]] = WireNode{Field: mm[1], Type: mm[2]}
 		}
@@ -960,7 +963,7 @@ func scanWire(path string, m *ProjectModel) error {
 	})
 
 	nodesByField := map[string]WireNode{}
-	for _, line := range readMarkerBlock(text, "// esb:inject:app-init") {
+	for _, line := range readTarget(text, injector.AppInit, injectedInit) {
 		if mm := initLineRegex.FindStringSubmatch(line); mm != nil {
 			// The constructor's type name (the word after `New`) is the
 			// PascalCase field name on App — e.g. `orderWorker := projection.NewOrderProjectionWorker(...)`
@@ -985,8 +988,8 @@ var autoMigrateRegex = regexp.MustCompile(`&([A-Z][A-Za-z0-9]+)Row\{\}`)
 
 // scanDB lists the GORM models registered in projection/db.go AutoMigrate. The
 // generator injects models after `// esb:inject:automigrate-models`, so only
-// the entries below that marker are reported (the base cursor row above it is
-// intentionally excluded).
+// the entries it injected are reported (the base cursor row is intentionally
+// excluded, with or without the marker).
 func scanDB(path string, m *ProjectModel) error {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -995,7 +998,7 @@ func scanDB(path string, m *ProjectModel) error {
 		}
 		return err
 	}
-	for _, line := range readMarkerBlock(string(src), "// esb:inject:automigrate-models") {
+	for _, line := range readTarget(string(src), injector.AutomigrateModels, injectedModel) {
 		if mm := autoMigrateRegex.FindStringSubmatch(line); mm != nil {
 			m.Migrate = append(m.Migrate, mm[1]+"Row")
 		}
@@ -1088,12 +1091,45 @@ func scanMain(path string, m *ProjectModel) error {
 		}
 		return err
 	}
-	for _, line := range readMarkerBlock(string(src), "// esb:inject:projection-workers") {
+	for _, line := range readTarget(string(src), injector.ProjectionWorkers, func(string) bool { return true }) {
 		if mm := runWorkerRegex.FindStringSubmatch(line); mm != nil {
 			m.RunWorker = append(m.RunWorker, mm[1])
 		}
 	}
 	return nil
+}
+
+// readTarget returns the lines esb injected at t: the marker block while t's
+// marker sits inside its construct (or the construct cannot be found), else
+// the construct's lines that keep accepts, so entries the template itself
+// declares there (App.Env, router, ProjectionCursorRow) are left out.
+func readTarget(text string, t injector.Target, keep func(line string) bool) []string {
+	region, marked, ok := t.Region(text)
+	if !ok || marked {
+		return readMarkerBlock(text, t.Marker)
+	}
+	var out []string
+	for _, line := range strings.Split(region, "\n") {
+		if keep(line) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// injectedField, injectedInit and injectedModel accept the entries esb
+// injects into App, NewApp and AutoMigrate: projection workers and handlers,
+// and every row model but the template's own cursor row.
+func injectedField(line string) bool {
+	return strings.Contains(line, "*projection.") || strings.Contains(line, "*handler.")
+}
+
+func injectedInit(line string) bool {
+	return strings.Contains(line, "projection.New") || strings.Contains(line, "handler.New")
+}
+
+func injectedModel(line string) bool {
+	return !strings.Contains(line, "&ProjectionCursorRow{}")
 }
 
 // readMarkerBlock returns the lines that sit directly under the marker

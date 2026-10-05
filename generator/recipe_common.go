@@ -16,7 +16,7 @@ func injectAutoMigrateModel(tx *injector.Tx, rowType string, actions *[]string) 
 	} else if ok {
 		return nil
 	}
-	if err := tx.InjectAfterMarker("projection/db.go", "// esb:inject:automigrate-models", "\t\t&"+rowType+"{},"); err != nil {
+	if err := tx.Inject("projection/db.go", injector.AutomigrateModels, "\t\t&"+rowType+"{},"); err != nil {
 		return err
 	}
 	*actions = append(*actions, "  update  projection/db.go")

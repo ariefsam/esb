@@ -137,7 +137,7 @@ func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
 	if err != nil {
 		return fmt.Errorf("render apply case: %w", err)
 	}
-	if err := tx.InjectAfterMarker(domainFile, "// esb:inject:apply-cases", applyCase); err != nil {
+	if err := tx.Inject(domainFile, injector.ApplyCases, applyCase); err != nil {
 		return err
 	}
 
@@ -146,7 +146,7 @@ func AddEvent(aggregateName, eventName string, fields []FieldDef) error {
 	if err != nil {
 		return fmt.Errorf("render worker case: %w", err)
 	}
-	if err := tx.InjectAfterMarker(workerFile, "// esb:inject:applyevent-cases", workerCase); err != nil {
+	if err := tx.Inject(workerFile, injector.ApplyEventCases, workerCase); err != nil {
 		return err
 	}
 

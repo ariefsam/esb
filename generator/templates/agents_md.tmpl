@@ -33,8 +33,11 @@ sync separately for queries.
 
 Files contain `// esb:inject:<name>` comments (e.g. in `wire/wire.go`,
 `server/routes.go`, `projection/db.go`). The `esb add` CLI inserts generated
-code at these markers. When editing these files by hand, keep the markers
-intact and add new code near them so future `esb add` runs don't conflict.
+code right after these markers. If a marker is deleted or moved, `esb add`
+falls back to the construct it belonged to (the `App` struct, `NewApp`, the
+`AutoMigrate` call in `NewProjectionDB`, the `workers` list in `main`, the
+`switch` in `Apply`/`applyEvent`, `RegisterRoutes`), so keep those names
+intact. Keeping the markers keeps placement exactly where it has always been.
 
 ## Snapshots
 

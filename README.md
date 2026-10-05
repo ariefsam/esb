@@ -1022,21 +1022,26 @@ make migrate-to-esb
 
 ## Injection Points
 
-`esb` menggunakan marker comment untuk mengetahui di mana harus menginjeksi kode ke file yang sudah ada. Jangan hapus marker ini:
+`esb` menggunakan marker comment untuk mengetahui di mana harus menginjeksi kode ke file yang sudah ada. Selama marker ada di dalam konstruksinya, kode disisipkan tepat setelah marker. Kalau marker terhapus atau dipindah keluar, `esb` memakai konstruksi Go tempat marker itu berada (kolom terakhir), jadi pertahankan nama-nama tersebut:
 
-| Marker | Lokasi | Digunakan oleh |
-|--------|--------|----------------|
-| `// esb:inject:apply-cases` | `domain/<agg>.go` dalam `Apply()` | `add event` |
-| `// esb:inject:applyevent-cases` | `projection/<agg>_worker.go` | `add event` |
-| `// esb:inject:automigrate-models` | `projection/db.go` | `add aggregate`, `add projection`, recipe |
-| `// esb:inject:app-fields`, `app-services`, `app-init`, `app-return-fields` | `wire/wire.go` | `add aggregate`, `add projection`, `add handler`, recipe |
-| `// esb:inject:projection-workers` | `main.go` | `add aggregate`, `add projection`, recipe |
-| `// esb:inject:routes` | `server/routes.go` | `add handler`, recipe crud (hint route) |
+| Marker | Lokasi | Digunakan oleh | Tanpa marker, kode masuk ke |
+|--------|--------|----------------|-----------------------------|
+| `// esb:inject:apply-cases` | `domain/<agg>.go` dalam `Apply()` | `add event` | `switch` di `Apply`, sebelum `default` |
+| `// esb:inject:applyevent-cases` | `projection/<agg>_worker.go` | `add event` | `switch` di `applyEvent`, sebelum `default` |
+| `// esb:inject:automigrate-models` | `projection/db.go` | `add aggregate`, `add projection`, recipe | argumen terakhir `AutoMigrate(…)` di `NewProjectionDB` |
+| `// esb:inject:app-fields` | `wire/wire.go` | `add aggregate`, `add projection`, `add handler`, recipe | field terakhir struct `App` |
+| `// esb:inject:app-services` | `wire/wire.go` | `add handler`, recipe ledger | `NewApp`, sebelum constructor `handler.` pertama (else sebelum `return`) |
+| `// esb:inject:app-init` | `wire/wire.go` | `add aggregate`, `add projection`, `add handler`, recipe | `NewApp`, sebelum `return` terakhir |
+| `// esb:inject:app-return-fields` | `wire/wire.go` | `add aggregate`, `add projection`, `add handler`, recipe | elemen terakhir literal `App{…}` di `NewApp` |
+| `// esb:inject:projection-workers` | `main.go` | `add aggregate`, `add projection`, recipe | elemen terakhir literal `workers` di `main` |
+| `// esb:inject:routes` | `server/routes.go` | `add handler`, recipe crud (hint route) | akhir `RegisterRoutes` |
 
-Setiap `esb add ...` bersifat transaksional: kalau marker tidak ditemukan (file
-diedit manual) atau hasilnya bukan Go yang valid, command gagal dengan pesan
-error (mis. `projection/db.go: marker "// esb:inject:automigrate-models" not found`)
-dan **tidak ada file yang ditulis**. Kembalikan marker-nya lalu jalankan ulang.
+Marker hanya dikenali sebagai comment utuh, bukan teks di dalam string atau
+comment lain. Setiap `esb add ...` bersifat transaksional: kalau marker
+**dan** konstruksinya sama-sama tidak ditemukan, atau hasilnya bukan Go yang
+valid, command gagal dengan pesan error (mis. `projection/db.go: neither
+AutoMigrate(…) call in NewProjectionDB nor marker "// esb:inject:automigrate-models" found`)
+dan **tidak ada file yang ditulis**.
 
 ---
 

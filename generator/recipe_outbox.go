@@ -88,16 +88,16 @@ func wireBackgroundWorker(tx *injector.Tx, workerType, ctorExpr string, actions 
 		return nil
 	}
 	workerVar := lcFirst(workerType)
-	if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+workerType+" *projection."+workerType); err != nil {
+	if err := tx.Inject("wire/wire.go", injector.AppFields, "\t"+workerType+" *projection."+workerType); err != nil {
 		return err
 	}
-	if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+workerVar+" := "+ctorExpr); err != nil {
+	if err := tx.Inject("wire/wire.go", injector.AppInit, "\t"+workerVar+" := "+ctorExpr); err != nil {
 		return err
 	}
-	if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+workerType+": "+workerVar+","); err != nil {
+	if err := tx.Inject("wire/wire.go", injector.AppReturnFields, "\t\t"+workerType+": "+workerVar+","); err != nil {
 		return err
 	}
-	if err := tx.InjectAfterMarker("main.go", "// esb:inject:projection-workers", "\t\tapp."+workerType+","); err != nil {
+	if err := tx.Inject("main.go", injector.ProjectionWorkers, "\t\tapp."+workerType+","); err != nil {
 		return err
 	}
 	*actions = append(*actions, "  update  wire/wire.go")

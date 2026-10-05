@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// TestAddEvent_TransactionalOnMissingMarker verifies #6: if an injection
-// fails partway (here, because a required marker was removed), AddEvent must
-// leave every file exactly as it was — no half-applied struct append, no
-// stray import.
-func TestAddEvent_TransactionalOnMissingMarker(t *testing.T) {
+// TestAddEvent_TransactionalOnMissingTarget verifies #6: if an injection
+// fails partway (here, because both the marker and the function it sits in
+// are gone), AddEvent must leave every file exactly as it was — no
+// half-applied struct append, no stray import.
+func TestAddEvent_TransactionalOnMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	if err := InitProject("example.com/shop", dir); err != nil {
@@ -26,16 +26,19 @@ func TestAddEvent_TransactionalOnMissingMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Remove the worker-case marker so the LAST injection in AddEvent fails
-	// after the domain-file mutations have already been staged.
+	// Remove the worker-case marker and rename the function it sits in, so
+	// the LAST injection in AddEvent fails after the domain-file mutations
+	// have already been staged. (A missing marker alone is no longer an
+	// error: the case would go into applyEvent's switch.)
 	workerFile := filepath.Join(dir, "projection", "order_worker.go")
 	wb, err := os.ReadFile(workerFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	corrupted := strings.Replace(string(wb), "// esb:inject:applyevent-cases", "// removed", 1)
-	if corrupted == string(wb) {
-		t.Fatal("test setup: worker marker not found")
+	corrupted = strings.ReplaceAll(corrupted, "applyEvent(", "applyRenamed(")
+	if !strings.Contains(corrupted, "// removed") || strings.Contains(corrupted, "applyEvent(") {
+		t.Fatal("test setup: worker marker or applyEvent not found")
 	}
 	if err := os.WriteFile(workerFile, []byte(corrupted), 0644); err != nil {
 		t.Fatal(err)
@@ -43,7 +46,7 @@ func TestAddEvent_TransactionalOnMissingMarker(t *testing.T) {
 
 	fields, _ := ParseFields([]string{"amount:int64"})
 	if err := AddEvent("order", "OrderPlaced", fields); err == nil {
-		t.Fatal("AddEvent() = nil, want error (marker was removed)")
+		t.Fatal("AddEvent() = nil, want error (marker and applyEvent were removed)")
 	}
 
 	// The domain file must be byte-identical to before: no struct appended,

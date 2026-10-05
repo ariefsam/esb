@@ -113,7 +113,7 @@ func wireAggregateSliceWithService(tx *injector.Tx, moduleName, pascal, serviceC
 	if ok, err := tx.Contains("wire/wire.go", svcVar+" :="); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-services", "\t"+svcVar+" := "+serviceCtor); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppServices, "\t"+svcVar+" := "+serviceCtor); err != nil {
 			return err
 		}
 	}
@@ -122,13 +122,13 @@ func wireAggregateSliceWithService(tx *injector.Tx, moduleName, pascal, serviceC
 		return err
 	} else if !ok {
 		workerVar := lower + "Worker"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+workerType+" *projection."+workerType); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppFields, "\t"+workerType+" *projection."+workerType); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+workerVar+" := projection.New"+workerType+"(eventRepo, db)"); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppInit, "\t"+workerVar+" := projection.New"+workerType+"(eventRepo, db)"); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+workerType+": "+workerVar+","); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppReturnFields, "\t\t"+workerType+": "+workerVar+","); err != nil {
 			return err
 		}
 	}
@@ -137,13 +137,13 @@ func wireAggregateSliceWithService(tx *injector.Tx, moduleName, pascal, serviceC
 		return err
 	} else if !ok {
 		handlerVar := lower + "Handler"
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-fields", "\t"+handlerType+" *handler."+handlerType); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppFields, "\t"+handlerType+" *handler."+handlerType); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-init", "\t"+handlerVar+" := handler.New"+handlerType+"("+svcVar+")"); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppInit, "\t"+handlerVar+" := handler.New"+handlerType+"("+svcVar+")"); err != nil {
 			return err
 		}
-		if err := tx.InjectAfterMarker("wire/wire.go", "// esb:inject:app-return-fields", "\t\t"+handlerType+": "+handlerVar+","); err != nil {
+		if err := tx.Inject("wire/wire.go", injector.AppReturnFields, "\t\t"+handlerType+": "+handlerVar+","); err != nil {
 			return err
 		}
 	}
@@ -152,7 +152,7 @@ func wireAggregateSliceWithService(tx *injector.Tx, moduleName, pascal, serviceC
 	if ok, err := tx.Contains("main.go", workerType); err != nil {
 		return err
 	} else if !ok {
-		if err := tx.InjectAfterMarker("main.go", "// esb:inject:projection-workers", "\t\tapp."+workerType+","); err != nil {
+		if err := tx.Inject("main.go", injector.ProjectionWorkers, "\t\tapp."+workerType+","); err != nil {
 			return err
 		}
 		*actions = append(*actions, "  update  main.go")
