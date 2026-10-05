@@ -164,3 +164,11 @@ func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e even
 		}).Error
 	})
 }
+
+// WaitPast implements domain.ProjectionWaiter: it returns once this
+// worker has applied the event with this ID, so a command can hold its
+// answer until its own write is readable (see
+// domain.StoreAndWaitProjectionWorker).
+func (w *{{.NamePascal}}ProjectionWorker) WaitPast(ctx context.Context, aggregateName string, id uint) error {
+	return NewCursorWaiter(w.db, "{{.Name}}", "{{.NameKebab}}").WaitPast(ctx, aggregateName, id)
+}

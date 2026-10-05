@@ -94,6 +94,9 @@ func AddProjection(projectionName string, aggregateNames []string) error {
 		actions = append(actions, "  update  main.go")
 	}
 
+	if err := stageWaitSupport(tx, moduleName, &actions); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}

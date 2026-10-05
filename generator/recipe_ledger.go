@@ -74,6 +74,9 @@ func AddLedger(name string) error {
 		return err
 	}
 
+	if err := stageWaitSupport(tx, moduleName, &actions); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}

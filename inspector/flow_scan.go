@@ -5,7 +5,7 @@ package inspector
 // bank-account" but not which event travels that edge. The three passes here
 // close that gap by reading the three declaration shapes the generator emits:
 //
-//	service/<agg>.go            s.store(ctx, agg, "OrderPlaced", …) or s.storeWithKey(…),
+//	service/<agg>.go            s.store(ctx, agg, "OrderPlaced", …), s.storeWithKey(…) or s.storeAndWait(…),
 //	                            directly or through unexported helpers, also of
 //	                            another service reached via a field (s.carts.checkout)
 //	server/handler/<h>.go       h.svc.Create(r.Context(), …), or any *service.<T> field
@@ -443,7 +443,17 @@ func eventStoreOps(body *ast.BlockStmt, recvName string, repos map[string]bool) 
 // itself. Its event name is a parameter, already read at the call site, so
 // walking into it would only mark the caller dynamic.
 func isStoreMethod(key string) bool {
-	return strings.HasSuffix(key, ".store") || strings.HasSuffix(key, ".storeWithKey")
+	i := strings.LastIndex(key, ".")
+	return i >= 0 && storeMethodNames[key[i+1:]]
+}
+
+// storeMethodNames are the generated service methods that append one
+// event whose name is their third argument: store(ctx, agg, "Name", …).
+var storeMethodNames = map[string]bool{
+	"store":        true,
+	"storeWithKey": true,
+	"storeAndWait": true,
+	"storeEvent":   true,
 }
 
 // soleAggregate returns the aggregate every event of cmds is stored on, or ""
@@ -548,8 +558,9 @@ func methodCalls(body *ast.BlockStmt, recvName, recvType string, fields map[stri
 	return calls
 }
 
-// storedEventNames walks a method body for `<recvName>.store(ctx, agg, X, …)`
-// or the idempotent `<recvName>.storeWithKey(ctx, agg, X, data, key)`
+// storedEventNames walks a method body for `<recvName>.store(ctx, agg, X, …)`,
+// the idempotent `<recvName>.storeWithKey(ctx, agg, X, data, key)`, or
+// `<recvName>.storeAndWait(ctx, agg, X, data, workers…)`
 // and reports the literal event names in X. found is false when the body never
 // calls a store method itself.
 func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dynamic, found bool) {
@@ -560,7 +571,7 @@ func storedEventNames(body *ast.BlockStmt, recvName string) (emits []string, dyn
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || (sel.Sel.Name != "store" && sel.Sel.Name != "storeWithKey") {
+		if !ok || !storeMethodNames[sel.Sel.Name] {
 			return true
 		}
 		if ident, ok := sel.X.(*ast.Ident); !ok || ident.Name != recvName {

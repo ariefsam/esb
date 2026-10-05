@@ -29,6 +29,7 @@ func InitProject(moduleName, destDir string) error {
 		{"domain_event.go.tmpl", "domain/event.go"},
 		{"domain_errors.go.tmpl", "domain/errors.go"},
 		{"domain_upcast.go.tmpl", "domain/upcast.go"},
+		{"domain_projection_wait.go.tmpl", "domain/projection_wait.go"},
 		{"eventstore_client.go.tmpl", "eventstore/client.go"},
 		{"eventstore_local_store.go.tmpl", "eventstore/local_store.go"},
 		{"eventstore_fake_store.go.tmpl", "eventstore/fake_store.go"},
@@ -39,6 +40,7 @@ func InitProject(moduleName, destDir string) error {
 		{"projection_db.go.tmpl", "projection/db.go"},
 		{"projection_query.go.tmpl", "projection/query.go"},
 		{"projection_repository.go.tmpl", "projection/repository.go"},
+		{"projection_wait.go.tmpl", "projection/wait.go"},
 		{"server_routes.go.tmpl", "server/routes.go"},
 		{"wire_wire.go.tmpl", "wire/wire.go"},
 	}

@@ -446,6 +446,45 @@ di-skip. Key kosong menonaktifkan guard. Di-generate sekali per proyek.
 
 ---
 
+### Menunggu projection: `storeAndWait`
+
+Read model diisi worker secara asinkron, jadi request yang membaca list
+tepat setelah command bisa belum melihat tulisannya sendiri. Setiap service
+hasil generate punya `storeAndWait` di samping `store`: event disimpan, lalu
+command **ditahan sampai worker yang disebut sudah memproses event itu**.
+
+```go
+// service: tahan sampai OrderProjectionWorker menerapkan OrderPlaced
+// (s.orderWorker: worker yang diteruskan ke service lewat wire)
+return s.storeAndWait(ctx, agg, "OrderPlaced", data, s.orderWorker)
+
+// tanpa service: fungsi bebas di domain
+stored, err := domain.StoreAndWaitProjectionWorker(ctx, repo, e, expectedVersion, worker1, worker2)
+```
+
+Cara kerjanya:
+
+- Saat menyimpan, event store (embedded maupun ESB server) mengembalikan
+  ID global event. Itu juga posisi yang dipakai worker sebagai cursor.
+  Hold dilepas begitu cursor worker ≥ ID itu.
+- Setiap worker hasil generate mengimplementasikan `domain.ProjectionWaiter`
+  (`WaitPast`). Untuk worker lain, `projection.NewCursorWaiter(db, "<nama
+  cursor>", aggregates...)` menunggu lewat baris `projection_cursors`-nya.
+- Worker yang tidak memproses aggregate event itu langsung dilewati.
+- Batas waktu `domain.ProjectionWaitTimeout` (default 2 detik). Kalau habis
+  hanya dicatat di log: event sudah tersimpan, jadi command tetap sukses.
+- Hanya worker di proses yang sama yang ditunggu. Dengan beberapa replica
+  yang masing-masing punya read model, request berikutnya yang masuk ke
+  replica lain bisa masih tertinggal.
+- Jangan menunggu sambil memegang lock. Untuk command yang memegang lock,
+  atau yang menyimpan beberapa event, simpan dengan `storeEvent`/`store`
+  lalu panggil `domain.WaitProjectionWorker(ctx, stored, workers...)`
+  setelah lock dilepas.
+
+Proyek lama mendapat fitur ini lewat `esb update-client`.
+
+---
+
 ### `esb delete event <aggregate> <EventName>`
 
 Kebalikan `esb add event`: hapus **kode** sebuah event dari aggregate — struct,
@@ -617,6 +656,37 @@ Di halaman `/flow` (`esb ui`):
   link bisa dibagikan. Kode dibuka lewat "Lihat kode" atau klik dua kali.
 - Legenda sekaligus toggle jenis garis; tombol −/Fit/+ untuk zoom; judul kolom
   tetap terlihat saat scroll.
+
+---
+
+### `esb update-client`
+
+Perbarui client event store proyek ke template esb versi ini, untuk mode
+embedded, ESB server, atau keduanya, **tanpa menimpa perubahan tangan**.
+
+```bash
+esb update-client --dry-run        # lihat dulu apa yang berubah
+esb update-client                  # semua mode (default)
+esb update-client --mode embedded  # hanya store lokal
+esb update-client --mode esb       # hanya client ESB server
+```
+
+| File | Mode |
+|---|---|
+| `eventstore/client.go`, `repository/eventstore_adapter.go` | `esb` |
+| `eventstore/local_store.go`, `repository/local_adapter.go` | `embedded` |
+| `eventstore/fake_store.go`, `domain/projection_wait.go`, `projection/wait.go` | semua |
+
+- File yang belum ada dibuat utuh.
+- File yang sudah ada hanya **ditambah** deklarasi top-level yang belum
+  dimilikinya, beserta import yang dibutuhkan. Pencocokan lewat Go AST:
+  function menurut nama, method menurut receiver + nama, type/var/const
+  menurut nama. Tidak ada yang diubah, dipindah, atau dihapus.
+- Deklarasi yang ada di kedua sisi tapi isinya beda ditandai `~` dan
+  dibiarkan. Format dan komentar tidak dihitung sebagai beda.
+- Semua file dihitung dulu sebelum ada yang ditulis. Setelah menulis,
+  `go build ./...` dijalankan (`--build=false` untuk melewati).
+- Aman dijalankan berulang: run kedua tidak mengubah apa pun.
 
 ---
 

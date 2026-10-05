@@ -45,6 +45,29 @@ replaying full history every time. The aggregate struct is JSON-marshaled
 as-is to build the snapshot — see the comment on the aggregate struct in
 `domain/<name>.go` before adding non-serializable fields.
 
+## Reading your own write
+
+The read model is filled asynchronously by the projection workers, so a
+request that reads a list straight after a command can miss its own write.
+Each service has `storeAndWait(ctx, agg, eventName, data, workers...)`
+beside `store`: it stores the event, then holds until every worker given
+has applied it. The event store returns the event's global ID, which is
+also the position a worker's cursor moves through; the hold ends when the
+cursor reaches it, or after `domain.ProjectionWaitTimeout` (2s), which is
+logged and never fails the command — the event is already stored.
+
+- Every generated worker implements `domain.ProjectionWaiter`. For any
+  other worker that keeps a `projection_cursors` row, use
+  `projection.NewCursorWaiter(db, "<cursor name>", aggregates...)`.
+- Only workers in this process are waited for. With several replicas, each
+  with its own read model, a read served by another one can still be
+  behind.
+- Never wait while holding a lock. For a command that holds one, or stores
+  several events, store first and call
+  `domain.WaitProjectionWorker(ctx, stored, workers...)` afterwards.
+- `esb update-client` brings this (and any newer client code) into a
+  project generated before it, adding only declarations that are missing.
+
 ## Distributed locks
 
 `wire.App.Locker` (type `domain.Locker`) gives mutual exclusion across

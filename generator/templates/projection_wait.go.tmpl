@@ -1,0 +1,68 @@
+package projection
+
+import (
+	"context"
+	"time"
+
+	"gorm.io/gorm"
+
+	"{{.ModuleName}}/domain"
+)
+
+// cursorPollInterval is how often a CursorWaiter re-reads the cursor.
+const cursorPollInterval = 20 * time.Millisecond
+
+// CursorWaiter is the domain.ProjectionWaiter of a worker that records
+// its progress in projection_cursors: the hold is released once the
+// worker's row there reaches the event's ID. The cursor is written in
+// the same transaction as the read-model rows, so by then they are
+// committed too.
+//
+// It reads the table rather than hooking into the worker, so it works
+// with any worker that keeps the cursor row — including ones written
+// before this existed.
+type CursorWaiter struct {
+	db         *gorm.DB
+	name       string
+	aggregates map[string]bool
+}
+
+// NewCursorWaiter waits on the worker whose cursor row is named name and
+// that projects aggregateNames. With no names, it waits for every
+// aggregate.
+func NewCursorWaiter(db *gorm.DB, name string, aggregateNames ...string) *CursorWaiter {
+	w := &CursorWaiter{db: db, name: name}
+	if len(aggregateNames) > 0 {
+		w.aggregates = make(map[string]bool, len(aggregateNames))
+		for _, a := range aggregateNames {
+			w.aggregates[a] = true
+		}
+	}
+	return w
+}
+
+// WaitPast implements domain.ProjectionWaiter.
+func (w *CursorWaiter) WaitPast(ctx context.Context, aggregateName string, id uint) error {
+	if w.aggregates != nil && !w.aggregates[aggregateName] {
+		return nil
+	}
+	for {
+		var rows []ProjectionCursorRow
+		if err := w.db.WithContext(ctx).Where("name = ?", w.name).Limit(1).Find(&rows).Error; err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		if len(rows) == 1 && rows[0].AfterID >= int64(id) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(cursorPollInterval):
+		}
+	}
+}
+
+var _ domain.ProjectionWaiter = (*CursorWaiter)(nil)

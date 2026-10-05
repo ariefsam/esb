@@ -117,9 +117,30 @@ func (s *{{.NamePascal}}Service) load(ctx context.Context, id string) (*domain.{
 // store appends one event with optimistic locking, applies it to agg, and
 // periodically snapshots so future load() calls can skip ahead.
 func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any) error {
-	b, err := json.Marshal(data)
+	_, err := s.storeEvent(ctx, agg, eventName, data)
+	return err
+}
+
+// storeAndWait is store, then holds until every one of workers has
+// applied the event, for a command whose caller reads the read model
+// straight afterwards. A worker still behind after
+// domain.ProjectionWaitTimeout is logged, not waited for: the event is
+// stored, so the command still succeeds.
+func (s *{{.NamePascal}}Service) storeAndWait(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any, workers ...domain.ProjectionWaiter) error {
+	stored, err := s.storeEvent(ctx, agg, eventName, data)
 	if err != nil {
 		return err
+	}
+	domain.WaitProjectionWorker(ctx, stored, workers...)
+	return nil
+}
+
+// storeEvent does the work of store and returns the stored event,
+// whose ID is the position projection workers report progress in.
+func (s *{{.NamePascal}}Service) storeEvent(ctx context.Context, agg *domain.{{.NamePascal}}, eventName string, data any) (domain.Event, error) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return domain.Event{}, err
 	}
 	expectedVersion := agg.Version
 	e := domain.Event{
@@ -130,11 +151,12 @@ func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NameP
 		Data:          b,
 		TimeMillis:    time.Now().UnixMilli(),
 	}
-	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
-		return err
+	stored, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion)
+	if err != nil {
+		return domain.Event{}, err
 	}
 	if err := agg.Apply(eventName, b); err != nil {
-		return err
+		return domain.Event{}, err
 	}
 
 	if agg.Version > 0 && agg.Version%{{.NamePascal}}SnapshotInterval == 0 {
@@ -142,5 +164,5 @@ func (s *{{.NamePascal}}Service) store(ctx context.Context, agg *domain.{{.NameP
 			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.NamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
 		}
 	}
-	return nil
+	return stored, nil
 }

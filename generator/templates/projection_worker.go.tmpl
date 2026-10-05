@@ -133,3 +133,11 @@ func (w *{{.AggregateNamePascal}}ProjectionWorker) applyEvent(ctx context.Contex
 
 // keep json import alive until first event is added
 var _ = json.Unmarshal
+
+// WaitPast implements domain.ProjectionWaiter: it returns once this
+// worker has applied the event with this ID, so a command can hold its
+// answer until its own write is readable (see
+// domain.StoreAndWaitProjectionWorker).
+func (w *{{.AggregateNamePascal}}ProjectionWorker) WaitPast(ctx context.Context, aggregateName string, id uint) error {
+	return NewCursorWaiter(w.db, "{{.AggregateName}}", "{{.AggregateNameKebab}}").WaitPast(ctx, aggregateName, id)
+}

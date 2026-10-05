@@ -1,0 +1,67 @@
+package domain
+
+import (
+	"context"
+	"log"
+	"time"
+)
+
+// ProjectionWaiter is a projection worker that can tell when it has
+// applied a given event. Generated projection workers implement it, and
+// projection.NewCursorWaiter builds one for any worker that records its
+// progress in projection_cursors.
+type ProjectionWaiter interface {
+	// WaitPast blocks until the worker has applied the event with this
+	// global ID (the ID the event store returned when it was stored), or
+	// ctx ends. A worker that does not project aggregateName returns at
+	// once: it will never see the event.
+	WaitPast(ctx context.Context, aggregateName string, id uint) error
+}
+
+// ProjectionWaitTimeout bounds how long StoreAndWaitProjectionWorker and
+// WaitProjectionWorker hold a command for its projections.
+var ProjectionWaitTimeout = 2 * time.Second
+
+// StoreAndWaitProjectionWorker stores e exactly like repo.StoreAtomic,
+// then holds until every one of workers has applied it — so a command
+// whose caller reads the read model straight afterwards reads its own
+// write instead of the state before it.
+//
+// The hold is released when each worker's cursor reaches the ID the
+// store returned, or after ProjectionWaitTimeout. A timeout is logged,
+// never returned: the event is already stored, and failing the command
+// would make its caller retry something that succeeded.
+//
+// Only workers running against this process's read model are waited
+// for. With several replicas, each with its own read model, a read that
+// lands on another replica can still be behind.
+func StoreAndWaitProjectionWorker(ctx context.Context, repo EventRepository, e Event, expectedVersion int64, workers ...ProjectionWaiter) (Event, error) {
+	stored, err := repo.StoreAtomic(ctx, e, expectedVersion)
+	if err != nil {
+		return stored, err
+	}
+	WaitProjectionWorker(ctx, stored, workers...)
+	return stored, nil
+}
+
+// WaitProjectionWorker holds until every one of workers has applied the
+// stored event, or ProjectionWaitTimeout passes. Use it after a command
+// that stores several events (wait for the last one of each aggregate),
+// or after releasing a lock the command held — never while holding one.
+func WaitProjectionWorker(ctx context.Context, stored Event, workers ...ProjectionWaiter) {
+	if len(workers) == 0 {
+		return
+	}
+	if stored.ID == 0 {
+		log.Printf("projection wait: %s %s has no event ID; not waiting", stored.AggregateName, stored.EventName)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, ProjectionWaitTimeout)
+	defer cancel()
+	for _, w := range workers {
+		if err := w.WaitPast(ctx, stored.AggregateName, stored.ID); err != nil {
+			log.Printf("projection wait: %s %s (event %d): %v; answering without it", stored.AggregateName, stored.EventName, stored.ID, err)
+			return
+		}
+	}
+}
