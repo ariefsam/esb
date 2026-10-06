@@ -481,7 +481,9 @@ Cara kerjanya:
   lalu panggil `domain.WaitProjectionWorker(ctx, stored, workers...)`
   setelah lock dilepas.
 
-Proyek lama mendapat fitur ini lewat `esb update-client`.
+Proyek lama mendapat fitur ini lewat `esb update-client`: file
+pendukungnya, `WaitPast` di setiap worker, dan `storeAndWait` di service
+yang `store`-nya belum diubah tangan (lihat di bawah).
 
 ---
 
@@ -676,6 +678,7 @@ esb update-client --mode esb       # hanya client ESB server
 | `eventstore/client.go`, `repository/eventstore_adapter.go` | `esb` |
 | `eventstore/local_store.go`, `repository/local_adapter.go` | `embedded` |
 | `eventstore/fake_store.go`, `domain/projection_wait.go`, `projection/wait.go` | semua |
+| `service/*.go`, `projection/*.go`: method `storeAndWait` / `WaitPast` saja | semua |
 
 - File yang belum ada dibuat utuh.
 - File yang sudah ada hanya **ditambah** deklarasi top-level yang belum
@@ -687,6 +690,22 @@ esb update-client --mode esb       # hanya client ESB server
 - Semua file dihitung dulu sebelum ada yang ditulis. Setelah menulis,
   `go build ./...` dijalankan (`--build=false` untuk melewati).
 - Aman dijalankan berulang: run kedua tidak mengubah apa pun.
+
+Untuk service dan worker yang dibuat sebelum ada `storeAndWait`, hanya
+method fitur itu yang ditambahkan, tidak ada deklarasi lain dari template.
+Dengan begitu method yang sengaja dihapus tidak muncul lagi.
+
+- Setiap `…ProjectionWorker` tanpa `WaitPast` mendapatkannya. Nama cursor
+  dan daftar aggregate dibaca dari worker itu sendiri (`Where("name = ?",
+  …)` dan argumen `FetchAll`), jadi selalu cocok dengan yang dipakai worker.
+- Service yang punya `store` tapi belum punya `storeEvent` mendapat
+  `storeEvent` dan `storeAndWait`, **hanya kalau `store`-nya masih sama
+  persis dengan buatan esb**. `storeEvent` mengulang isi `store` itu, jadi
+  `store` yang sudah diubah tangan akan terlewati. Service seperti itu
+  ditandai `!` dan dibiarkan: panggil
+  `domain.StoreAndWaitProjectionWorker` dari command-nya sendiri.
+- Service yang sudah punya `storeEvent` tapi tidak punya `storeAndWait`
+  dianggap sengaja menghapusnya, jadi tidak disentuh.
 
 ---
 

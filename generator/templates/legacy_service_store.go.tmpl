@@ -1,0 +1,37 @@
+package service
+
+// store as esb generated it from efec75d until b980af1 brought storeAndWait.
+// esb update-client compares a service's store with this, and adds
+// storeEvent and storeAndWait only when it still reads the same: storeEvent
+// repeats this body, so a store changed by hand must not be bypassed.
+func (s *{{.AggregateNamePascal}}Service) store(ctx context.Context, agg *domain.{{.AggregateNamePascal}}, eventName string, data any) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	expectedVersion := agg.Version
+	e := domain.Event{
+		AggregateName: domain.{{.AggregateNamePascal}}AggregateName,
+		AggregateID:   agg.AggregateID,
+		EventName:     eventName,
+		Version:       expectedVersion + 1,
+		Data:          b,
+		TimeMillis:    time.Now().UnixMilli(),
+	}
+	if _, err := s.eventRepo.StoreAtomic(ctx, e, expectedVersion); err != nil {
+		return err
+	}
+	if err := agg.Apply(eventName, b); err != nil {
+		return err
+	}
+
+	// Snapshotting is an optimization for load(), not the source of
+	// truth — the event above is already durably stored, so a failure
+	// here is intentionally ignored rather than failing the command.
+	if agg.Version > 0 && agg.Version%{{.AggregateNamePascal}}SnapshotInterval == 0 {
+		if state, err := json.Marshal(agg); err == nil {
+			_, _ = s.eventRepo.StoreSnapshot(ctx, domain.{{.AggregateNamePascal}}AggregateName, agg.AggregateID, agg.Version, state)
+		}
+	}
+	return nil
+}

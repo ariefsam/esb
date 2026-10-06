@@ -31,6 +31,7 @@ server client, or both:
   eventstore/fake_store.go           every mode
   domain/projection_wait.go          every mode   (StoreAndWaitProjectionWorker)
   projection/wait.go                 every mode   (CursorWaiter)
+  service/*.go, projection/*.go      every mode   (storeAndWait, WaitPast only)
 
 A missing file is created. An existing one only gains the top-level
 declarations it does not have yet, with the imports they need. Matching is
@@ -39,6 +40,14 @@ name, a type, var or const by name — so nothing the project declares is
 changed, moved or removed, and hand edits survive. A declaration the
 project has but with different code is listed as "differs" and left alone:
 compare it with the template yourself.
+
+Services and projection workers generated before storeAndWait only gain
+that feature's methods, never other template declarations: each
+...ProjectionWorker without WaitPast gets one, built from its own cursor
+name and FetchAll aggregates; each service gets storeEvent and storeAndWait
+only while its store is still the one esb generated. A store changed by
+hand is reported with "!" and left alone, since storeEvent repeats the
+generated body and would bypass the change.
 
 Afterwards it runs 'go build ./...' so a merge that does not compile is
 reported straight away (--build=false to skip). Run with --dry-run first to

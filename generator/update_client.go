@@ -74,6 +74,9 @@ func (c ClientFileChange) Changed() bool { return c.Created || len(c.Added) > 0 
 // removed, so hand edits survive. Declarations the project changed are
 // reported in Differs, for a human to compare.
 //
+// It also brings storeAndWait to the services and WaitPast to the
+// projection workers that predate them (see waitMethodChanges).
+//
 // Every file is computed before any is written; a file that fails to
 // parse or merge aborts the whole update with nothing written.
 func UpdateClient(opts UpdateClientOptions) ([]ClientFileChange, error) {
@@ -124,6 +127,15 @@ func UpdateClient(opts UpdateClientOptions) ([]ClientFileChange, error) {
 			}
 		}
 		changes = append(changes, change)
+	}
+
+	waitChanges, waitOutputs, err := waitMethodChanges(moduleName)
+	if err != nil {
+		return nil, err
+	}
+	changes = append(changes, waitChanges...)
+	for path, out := range waitOutputs {
+		outputs[path] = out
 	}
 
 	if opts.DryRun {

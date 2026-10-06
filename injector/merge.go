@@ -46,6 +46,52 @@ type MergeResult struct {
 // declaration look new. A declaration both files have but with different
 // code is reported in Differs and left alone.
 func MergeDecls(existing, generated []byte) (MergeResult, error) {
+	return mergeDecls(existing, generated, nil)
+}
+
+// MergeSelectedDecls is MergeDecls limited to the functions and methods
+// named by keys ("func F", "method T.M", as MergeResult reports them):
+// every other declaration of generated is ignored, neither added nor
+// compared. It brings one feature into a file without bringing back
+// declarations the project removed on purpose.
+func MergeSelectedDecls(existing, generated []byte, keys ...string) (MergeResult, error) {
+	only := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		only[k] = true
+	}
+	return mergeDecls(existing, generated, only)
+}
+
+// SameDecl reports whether a and b both declare the function or method
+// key with the same code, compared as MergeDecls compares (layout and
+// comments aside).
+func SameDecl(a, b []byte, key string) (bool, error) {
+	afset := token.NewFileSet()
+	af, err := parser.ParseFile(afset, "", a, parser.ParseComments)
+	if err != nil {
+		return false, fmt.Errorf("parse: %w", err)
+	}
+	bfset := token.NewFileSet()
+	bf, err := parser.ParseFile(bfset, "", b, parser.ParseComments)
+	if err != nil {
+		return false, fmt.Errorf("parse reference: %w", err)
+	}
+	an, bn := findFunc(afset, af, key), findFunc(bfset, bf, key)
+	return an != nil && bn != nil && sameCode(afset, an, bfset, bn), nil
+}
+
+func findFunc(fset *token.FileSet, f *ast.File, key string) *ast.FuncDecl {
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && funcKey(fset, fd) == key {
+			return fd
+		}
+	}
+	return nil
+}
+
+// mergeDecls is MergeDecls, limited to the function and method keys in
+// only when only is not nil.
+func mergeDecls(existing, generated []byte, only map[string]bool) (MergeResult, error) {
 	var res MergeResult
 	efset := token.NewFileSet()
 	ef, err := parser.ParseFile(efset, "", existing, parser.ParseComments)
@@ -74,6 +120,9 @@ func MergeDecls(existing, generated []byte) (MergeResult, error) {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
 			key := funcKey(gfset, d)
+			if only != nil && !only[key] {
+				continue
+			}
 			if old, ok := have[key]; ok {
 				if !sameCode(efset, old, gfset, d) {
 					res.Differs = append(res.Differs, key)
@@ -84,7 +133,7 @@ func MergeDecls(existing, generated []byte) (MergeResult, error) {
 			addedNodes = append(addedNodes, d)
 			res.Added = append(res.Added, key)
 		case *ast.GenDecl:
-			if d.Tok == token.IMPORT {
+			if d.Tok == token.IMPORT || only != nil {
 				continue
 			}
 			text, added, skipped, differs := mergeGenDecl(generated, gfset, d, have, efset)
