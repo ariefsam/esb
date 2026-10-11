@@ -108,6 +108,8 @@ func (w *{{.NamePascal}}ProjectionWorker) wait(ctx context.Context, d time.Durat
 	}
 }
 
+// applyEvent updates the read model, appends the activity log entry, and
+// advances the cursor in one transaction, so the three never disagree.
 func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e eventstore.Event) error {
 	return w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		switch e.EventName {
@@ -127,13 +129,29 @@ func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e even
 			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error; err != nil {
 				return err
 			}
+			changes := map[string]ActivityChange{
+{{range .Fields}}				"{{.JSONTag}}": {{if .Redact}}RedactedChange(){{else}}{To: evt.{{.NamePascal}}}{{end}},
+{{end}}			}
+			if err := w.recordActivity(tx, e, "created", evt.Actor, changes); err != nil {
+				return err
+			}
 
 		case "{{.NamePascal}}Updated":
 			var evt domain.{{.NamePascal}}Updated
 			if err := json.Unmarshal(e.Data, &evt); err != nil {
 				return err
 			}
-			updates := map[string]any{
+			// Read the row before updating it: the activity entry records
+			// each field that changed, with its old and new value.
+			var old {{.NamePascal}}Row
+			if err := tx.Where("aggregate_id = ?", e.AggregateID).First(&old).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			changes := map[string]ActivityChange{}
+{{range .Fields}}			if old.{{.NamePascal}} != evt.{{.NamePascal}} {
+				changes["{{.JSONTag}}"] = {{if .Redact}}RedactedChange(){{else}}ActivityChange{From: old.{{.NamePascal}}, To: evt.{{.NamePascal}}}{{end}}
+			}
+{{end}}			updates := map[string]any{
 {{range .Fields}}				"{{.JSONTag}}": evt.{{.NamePascal}},
 {{end}}				"version":    e.Version,
 				"updated_at": e.TimeMillis,
@@ -141,14 +159,25 @@ func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e even
 			if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).Updates(updates).Error; err != nil {
 				return err
 			}
+			if err := w.recordActivity(tx, e, "updated", evt.Actor, changes); err != nil {
+				return err
+			}
 
 		case "{{.NamePascal}}Archived":
-			updates := map[string]any{
-				"archived":   true,
-				"version":    e.Version,
-				"updated_at": e.TimeMillis,
+			var evt domain.{{.NamePascal}}Archived
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
 			}
-			if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).Updates(updates).Error; err != nil {
+			if err := w.setArchived(tx, e, evt.Actor, true); err != nil {
+				return err
+			}
+
+		case "{{.NamePascal}}Restored":
+			var evt domain.{{.NamePascal}}Restored
+			if err := json.Unmarshal(e.Data, &evt); err != nil {
+				return err
+			}
+			if err := w.setArchived(tx, e, evt.Actor, false); err != nil {
 				return err
 			}
 		}
@@ -163,6 +192,47 @@ func (w *{{.NamePascal}}ProjectionWorker) applyEvent(ctx context.Context, e even
 			UpdatedAt: e.TimeMillis,
 		}).Error
 	})
+}
+
+// setArchived applies an Archived (archived=true) or Restored
+// (archived=false) event to the read model and the activity log.
+func (w *{{.NamePascal}}ProjectionWorker) setArchived(tx *gorm.DB, e eventstore.Event, actor domain.Actor, archived bool) error {
+	updates := map[string]any{
+		"archived":   archived,
+		"version":    e.Version,
+		"updated_at": e.TimeMillis,
+	}
+	if err := tx.Model(&{{.NamePascal}}Row{}).Where("aggregate_id = ?", e.AggregateID).Updates(updates).Error; err != nil {
+		return err
+	}
+	action := "restored"
+	if archived {
+		action = "archived"
+	}
+	changes := map[string]ActivityChange{
+		"archived": {From: !archived, To: archived},
+	}
+	return w.recordActivity(tx, e, action, actor, changes)
+}
+
+// recordActivity appends the activity log entry for e. An event stored
+// without an actor is attributed to the system actor. If the entry already
+// exists (the event was applied before), it is left as it is.
+func (w *{{.NamePascal}}ProjectionWorker) recordActivity(tx *gorm.DB, e eventstore.Event, action string, actor domain.Actor, changes map[string]ActivityChange) error {
+	b, err := json.Marshal(changes)
+	if err != nil {
+		return err
+	}
+	actor = actor.OrSystem()
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&{{.NamePascal}}ActivityRow{
+		AggregateID: e.AggregateID,
+		Version:     e.Version,
+		Action:      action,
+		Changes:     b,
+		ActorID:     actor.ActorID,
+		ActorName:   actor.ActorName,
+		OccurredAt:  e.TimeMillis,
+	}).Error
 }
 
 // WaitPast implements domain.ProjectionWaiter: it returns once this

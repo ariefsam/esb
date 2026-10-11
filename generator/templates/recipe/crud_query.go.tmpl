@@ -11,7 +11,45 @@ func List{{.NamePascal}}s(ctx context.Context, db *gorm.DB) ([]{{.NamePascal}}Ro
 	return NewRepository[{{.NamePascal}}Row](db).ListWhere(ctx, "archived", false)
 }
 
-// Get{{.NamePascal}} returns a single {{.NamePascal}} row by its aggregate ID.
+// ListArchived{{.NamePascal}}s returns the archived {{.NamePascal}} rows — the
+// ones Restore can bring back.
+func ListArchived{{.NamePascal}}s(ctx context.Context, db *gorm.DB) ([]{{.NamePascal}}Row, error) {
+	return NewRepository[{{.NamePascal}}Row](db).ListWhere(ctx, "archived", true)
+}
+
+// Get{{.NamePascal}} returns a single {{.NamePascal}} row by its aggregate ID,
+// archived or not.
 func Get{{.NamePascal}}(ctx context.Context, db *gorm.DB, id string) (*{{.NamePascal}}Row, error) {
 	return NewRepository[{{.NamePascal}}Row](db).GetByID(ctx, id)
+}
+
+// List{{.NamePascal}}Activities returns one page of a {{.NamePascal}}'s
+// activity log, newest first, plus the total number of entries. page is
+// 1-based.
+func List{{.NamePascal}}Activities(ctx context.Context, db *gorm.DB, id string, page, pageSize int) ([]{{.NamePascal}}ActivityRow, int64, error) {
+	// A fresh chain per statement: reusing one *gorm.DB after Count would
+	// carry Count's state into Find.
+	q := func() *gorm.DB {
+		return db.WithContext(ctx).Model(&{{.NamePascal}}ActivityRow{}).Where("aggregate_id = ?", id)
+	}
+	var total int64
+	if err := q().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []{{.NamePascal}}ActivityRow
+	err := q().Order("version DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error
+	return rows, total, err
+}
+
+// ListRecent{{.NamePascal}}Activities returns one page of the activity log
+// across every {{.NamePascal}}, newest first, plus the total number of
+// entries. page is 1-based.
+func ListRecent{{.NamePascal}}Activities(ctx context.Context, db *gorm.DB, page, pageSize int) ([]{{.NamePascal}}ActivityRow, int64, error) {
+	var total int64
+	if err := db.WithContext(ctx).Model(&{{.NamePascal}}ActivityRow{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []{{.NamePascal}}ActivityRow
+	err := db.WithContext(ctx).Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error
+	return rows, total, err
 }

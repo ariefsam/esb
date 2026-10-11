@@ -1,0 +1,16 @@
+package projection
+
+// ActivityChange is one field's change in an activity log entry. From is
+// null when the field had no previous value (on create).
+type ActivityChange struct {
+	From     any  `json:"from"`
+	To       any  `json:"to"`
+	Redacted bool `json:"redacted,omitempty"`
+}
+
+// RedactedChange records that a field changed without storing its values.
+// Fields marked with --activity-redact use it, so personal data (email,
+// phone, ID numbers) is not copied into the activity table.
+func RedactedChange() ActivityChange {
+	return ActivityChange{Redacted: true}
+}

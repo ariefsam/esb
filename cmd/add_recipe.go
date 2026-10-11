@@ -16,7 +16,7 @@ pattern instead of a single component. Everything is written in one atomic
 step — if any part fails, nothing is written.
 
 Available recipes:
-  crud         <name> [field:type ...]   entity with Create/Update/Archive (soft delete)
+  crud         <name> [field:type ...]   entity with Create/Update/Archive/Restore (soft delete)
   ledger       <name>                     append-only account: Open/Deposit/Withdraw/Freeze/Close
   statemachine <name> --states --transitions   guarded lifecycle transitions
   saga         <name>                     orchestration saga: two-step transfer + compensation
@@ -137,24 +137,33 @@ Examples:
 	},
 }
 
+var crudActivityRedact []string
+
 var addRecipeCRUDCmd = &cobra.Command{
 	Use:   "crud <name> [field:type ...]",
-	Short: "Entity CRUD: Create/Update/Archive events, commands, projection, queries, handlers, tests",
+	Short: "Entity CRUD: Create/Update/Archive/Restore events, commands, projection, queries, handlers, tests",
 	Long: `Generates a full CRUD slice for an entity aggregate:
 
-  - domain aggregate + Created/Updated/Archived events (Archived = soft delete)
-  - service with Create/Update/Archive commands (invariants on the aggregate)
+  - domain aggregate + Created/Updated/Archived/Restored events (Archived = soft delete)
+  - service with Create/Update/Archive/Restore commands (invariants on the aggregate)
   - read-model row + projection worker
-  - List<Name>s / Get<Name> queries
-  - write-side HTTP handlers (Create/Update/Archive)
+  - activity log: one entry per event with the actor (domain.ActorFrom(ctx),
+    "system" when none is set) and each changed field's old and new value
+  - List<Name>s / Get<Name> / List<Name>Activities queries
+  - write-side HTTP handlers (Create/Update/Archive/Restore)
+  - read-side HTTP handlers (List/Get/Activities)
   - Given-When-Then scenario tests (happy path + failure paths)
 
 Name must be snake_case. Fields use field_name:go_type syntax.
 Supported types: string, int64, int32, int, float64, float32, bool.
+The field names actor, actor_id and actor_name are reserved.
+
+--activity-redact lists fields whose values are kept out of the activity log
+(it records only that they changed). Use it for personal data.
 
 Examples:
   esb add recipe crud product name:string price:int64 sku:string
-  esb add recipe crud customer email:string display_name:string`,
+  esb add recipe crud customer email:string display_name:string --activity-redact email`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
@@ -163,7 +172,7 @@ Examples:
 			return err
 		}
 		fmt.Printf("Scaffolding CRUD recipe: %s\n\n", name)
-		return generator.AddCRUD(name, fields)
+		return generator.AddCRUD(name, fields, crudActivityRedact...)
 	},
 }
 
@@ -194,6 +203,8 @@ Examples:
 
 func init() {
 	addRecipeCmd.Flags().BoolVar(&recipeList, "list", false, "list the available recipes and exit")
+
+	addRecipeCRUDCmd.Flags().StringSliceVar(&crudActivityRedact, "activity-redact", nil, "comma-separated fields logged as changed without their values")
 
 	addRecipeStateMachineCmd.Flags().StringVar(&smStates, "states", "", "comma-separated snake_case states; first is the initial state (required)")
 	addRecipeStateMachineCmd.Flags().StringVar(&smTransitions, "transitions", "", "comma-separated from->to pairs")

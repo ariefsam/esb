@@ -22,6 +22,24 @@ func Test{{.NamePascal}}Service_Create(t *testing.T) {
 	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
 		When(func(ctx context.Context) error { return svc.Create(ctx, "{{.Name}}-1", in) }).
 		Then(testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+			Actor: domain.SystemActor(),
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}))
+}
+
+// The actor set on the context by the auth middleware is stored with the
+// event; without one, events carry domain.SystemActor().
+func Test{{.NamePascal}}Service_CreateRecordsActor(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	actor := domain.Actor{ActorID: "user-1", ActorName: "Test User"}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1").
+		When(func(ctx context.Context) error { return svc.Create(domain.WithActor(ctx, actor), "{{.Name}}-1", in) }).
+		Then(testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+			Actor: actor,
 {{range .Fields}}			{{.NamePascal}}: {{.Sample}},
 {{end}}		}))
 }
@@ -54,6 +72,7 @@ func Test{{.NamePascal}}Service_Update(t *testing.T) {
 	).
 		When(func(ctx context.Context) error { return svc.Update(ctx, "{{.Name}}-1", in) }).
 		Then(testkit.Event("{{.NamePascal}}Updated", domain.{{.NamePascal}}Updated{
+			Actor: domain.SystemActor(),
 {{range .Fields}}			{{.NamePascal}}: {{.Sample}},
 {{end}}		}))
 }
@@ -78,7 +97,7 @@ func Test{{.NamePascal}}Service_Archive(t *testing.T) {
 {{end}}		}),
 	).
 		When(func(ctx context.Context) error { return svc.Archive(ctx, "{{.Name}}-1") }).
-		Then(testkit.Event("{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{}))
+		Then(testkit.Event("{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{Actor: domain.SystemActor()}))
 }
 
 // Archiving an already-archived aggregate is a no-op success (idempotent):
@@ -96,7 +115,7 @@ func Test{{.NamePascal}}Service_ArchiveTwiceIsIdempotent(t *testing.T) {
 		Then() // no new event
 }
 
-// Updating an archived aggregate is rejected — archived is a terminal state.
+// Updating an archived aggregate is rejected until it is restored.
 func Test{{.NamePascal}}Service_UpdateAfterArchiveFails(t *testing.T) {
 	repo := eventstore.NewFakeStore()
 	svc := New{{.NamePascal}}Service(repo)
@@ -111,4 +130,60 @@ func Test{{.NamePascal}}Service_UpdateAfterArchiveFails(t *testing.T) {
 	).
 		When(func(ctx context.Context) error { return svc.Update(ctx, "{{.Name}}-1", in) }).
 		ThenError(Err{{.NamePascal}}NotFound)
+}
+
+func Test{{.NamePascal}}Service_Restore(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+		testkit.Event("{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{}),
+	).
+		When(func(ctx context.Context) error { return svc.Restore(ctx, "{{.Name}}-1") }).
+		Then(testkit.Event("{{.NamePascal}}Restored", domain.{{.NamePascal}}Restored{Actor: domain.SystemActor()}))
+}
+
+// Restoring an aggregate that is not archived is a no-op success
+// (idempotent): no new event is appended.
+func Test{{.NamePascal}}Service_RestoreActiveIsIdempotent(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+	).
+		When(func(ctx context.Context) error { return svc.Restore(ctx, "{{.Name}}-1") }).
+		Then() // no new event
+}
+
+func Test{{.NamePascal}}Service_RestoreMissingFails(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-missing").
+		When(func(ctx context.Context) error { return svc.Restore(ctx, "{{.Name}}-missing") }).
+		ThenError(Err{{.NamePascal}}NotFound)
+}
+
+// A restored aggregate accepts updates again.
+func Test{{.NamePascal}}Service_UpdateAfterRestore(t *testing.T) {
+	repo := eventstore.NewFakeStore()
+	svc := New{{.NamePascal}}Service(repo)
+	in := {{.NamePascal}}Input{
+{{range .Fields}}		{{.NamePascal}}: {{.Sample}},
+{{end}}	}
+	testkit.Given(t, repo, domain.{{.NamePascal}}AggregateName, "{{.Name}}-1",
+		testkit.Event("{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}),
+		testkit.Event("{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{}),
+		testkit.Event("{{.NamePascal}}Restored", domain.{{.NamePascal}}Restored{}),
+	).
+		When(func(ctx context.Context) error { return svc.Update(ctx, "{{.Name}}-1", in) }).
+		Then(testkit.Event("{{.NamePascal}}Updated", domain.{{.NamePascal}}Updated{
+			Actor: domain.SystemActor(),
+{{range .Fields}}			{{.NamePascal}}: {{.Sample}},
+{{end}}		}))
 }

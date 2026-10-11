@@ -1,0 +1,50 @@
+package domain
+
+import "context"
+
+// The actor recorded when a command runs without one in its context
+// (background jobs, CLI tools, unauthenticated calls) and when an event
+// stored without an actor is read back.
+const (
+	SystemActorID   = "xxxx"
+	SystemActorName = "system"
+)
+
+// Actor identifies who issued a command. Events embed it, so it is stored
+// with each event and shows up in activity logs.
+type Actor struct {
+	ActorID   string `json:"actor_id"`
+	ActorName string `json:"actor_name"`
+}
+
+// SystemActor returns the actor used when no actor is known.
+func SystemActor() Actor {
+	return Actor{ActorID: SystemActorID, ActorName: SystemActorName}
+}
+
+// OrSystem returns a, or SystemActor when a has no ActorID.
+func (a Actor) OrSystem() Actor {
+	if a.ActorID == "" {
+		return SystemActor()
+	}
+	return a
+}
+
+type actorKey struct{}
+
+// WithActor returns a copy of ctx carrying a. Set it in your auth middleware
+// from the authenticated identity (e.g. verified JWT claims), never from a
+// client-supplied header or body field — anyone could then act as anyone.
+//
+//	ctx := domain.WithActor(r.Context(), domain.Actor{ActorID: claims.Subject, ActorName: claims.Name})
+//	next.ServeHTTP(w, r.WithContext(ctx))
+func WithActor(ctx context.Context, a Actor) context.Context {
+	return context.WithValue(ctx, actorKey{}, a)
+}
+
+// ActorFrom returns the actor carried by ctx, or SystemActor when there is
+// none.
+func ActorFrom(ctx context.Context) Actor {
+	a, _ := ctx.Value(actorKey{}).(Actor)
+	return a.OrSystem()
+}

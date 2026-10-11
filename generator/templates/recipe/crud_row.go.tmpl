@@ -1,13 +1,31 @@
 package projection
 
+import "encoding/json"
+
 // {{.NamePascal}}Row is the read-model row for the {{.NamePascal}} aggregate.
 type {{.NamePascal}}Row struct {
-	AggregateID string `gorm:"primaryKey"`
+	AggregateID string `gorm:"primaryKey" json:"id"`
 {{range .Fields}}	{{.NamePascal}} {{.Type}} `gorm:"column:{{.JSONTag}}" json:"{{.JSONTag}}"`
-{{end}}	Archived  bool  `gorm:"column:archived;not null;default:false"`
-	Version   int64 `gorm:"not null;default:0"`
-	CreatedAt int64 `gorm:"not null;default:0"`
-	UpdatedAt int64 `gorm:"not null;default:0"`
+{{end}}	Archived  bool  `gorm:"column:archived;not null;default:false" json:"archived"`
+	Version   int64 `gorm:"not null;default:0" json:"version"`
+	CreatedAt int64 `gorm:"not null;default:0" json:"created_at"`
+	UpdatedAt int64 `gorm:"not null;default:0" json:"updated_at"`
 }
 
 func ({{.NamePascal}}Row) TableName() string { return "{{.TableName}}" }
+
+// {{.NamePascal}}ActivityRow is one entry in a {{.NamePascal}}'s activity log:
+// one row per event, append-only. (aggregate_id, version) is unique, so
+// re-applying an event never records it twice.
+type {{.NamePascal}}ActivityRow struct {
+	ID          uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	AggregateID string          `gorm:"column:aggregate_id;not null;uniqueIndex:idx_{{.Name}}_activity_version,priority:1" json:"aggregate_id"`
+	Version     int64           `gorm:"column:version;not null;uniqueIndex:idx_{{.Name}}_activity_version,priority:2" json:"version"`
+	Action      string          `gorm:"column:action;not null" json:"action"`
+	Changes     json.RawMessage `gorm:"column:changes" json:"changes"`
+	ActorID     string          `gorm:"column:actor_id;not null;index" json:"actor_id"`
+	ActorName   string          `gorm:"column:actor_name;not null" json:"actor_name"`
+	OccurredAt  int64           `gorm:"column:occurred_at;not null" json:"occurred_at"`
+}
+
+func ({{.NamePascal}}ActivityRow) TableName() string { return "{{.Name}}_activities" }

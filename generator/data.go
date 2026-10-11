@@ -61,6 +61,7 @@ type CRUDField struct {
 	JSONTag    string // json tag / gorm column: "price"
 	Type       string // Go type: "string", "int64", ...
 	Sample     string // Go literal for tests: `"sample"`, `1`, `true`
+	Redact     bool   // activity log records that it changed, not its values
 }
 
 // CRUDData is passed to the CRUD recipe templates. It describes one entity

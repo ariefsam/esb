@@ -141,7 +141,8 @@ For whole common patterns, prefer a **recipe** over wiring components by hand �
 each generates a complete, tested vertical slice in one atomic step:
 
 - `esb add recipe crud <name> [field:type ...]` — entity CRUD with soft delete
-  (Create/Update/Archive), read model, queries, handler, scenario tests.
+  (Create/Update/Archive/Restore), read model, activity log (actor from
+  `domain.WithActor(ctx, ...)`), queries, handlers, scenario tests.
 - `esb add recipe ledger <name>` — append-only account (Open/Deposit/Withdraw/
   Freeze/Close) with a non-negative-balance invariant and a statement journal.
 - `esb add recipe statemachine <name> --states ... --transitions ...` — a

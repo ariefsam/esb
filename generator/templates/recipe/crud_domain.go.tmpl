@@ -44,6 +44,10 @@ func ({{.Receiver}} *{{.NamePascal}}) Apply(eventName string, data json.RawMessa
 		{{.Receiver}}.Archived = true
 		{{.Receiver}}.Version++
 		return nil
+	case "{{.NamePascal}}Restored":
+		{{.Receiver}}.Archived = false
+		{{.Receiver}}.Version++
+		return nil
 	default:
 		return nil
 	}
@@ -68,15 +72,27 @@ func ({{.Receiver}} *{{.NamePascal}}) Exists() bool {
 	return {{.Receiver}}.Version > 0 && !{{.Receiver}}.Archived
 }
 
+// Every {{.NamePascal}} event embeds the Actor who issued the command, so the
+// activity log can show who did what.
+
 // {{.NamePascal}}Created event.
 type {{.NamePascal}}Created struct {
+	Actor
 {{range .Fields}}	{{.NamePascal}} {{.Type}} `json:"{{.JSONTag}}"`
 {{end}}}
 
 // {{.NamePascal}}Updated event.
 type {{.NamePascal}}Updated struct {
+	Actor
 {{range .Fields}}	{{.NamePascal}} {{.Type}} `json:"{{.JSONTag}}"`
 {{end}}}
 
 // {{.NamePascal}}Archived event.
-type {{.NamePascal}}Archived struct{}
+type {{.NamePascal}}Archived struct {
+	Actor
+}
+
+// {{.NamePascal}}Restored event: undoes a {{.NamePascal}}Archived.
+type {{.NamePascal}}Restored struct {
+	Actor
+}

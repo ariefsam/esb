@@ -15,8 +15,8 @@ import (
 const {{.NamePascal}}SnapshotInterval = 100
 
 var (
-	// Err{{.NamePascal}}NotFound is returned by Update/Archive when the entity
-	// does not exist (or was already archived).
+	// Err{{.NamePascal}}NotFound is returned by Update/Archive/Restore when
+	// the entity never existed, and by Update when it is archived.
 	Err{{.NamePascal}}NotFound = errors.New("{{.NameKebab}} not found")
 	// Err{{.NamePascal}}Exists is returned by Create when the entity already
 	// exists.
@@ -49,6 +49,7 @@ func (s *{{.NamePascal}}Service) Create(ctx context.Context, id string, in {{.Na
 		return Err{{.NamePascal}}Exists
 	}
 	return s.store(ctx, agg, "{{.NamePascal}}Created", domain.{{.NamePascal}}Created{
+		Actor: domain.ActorFrom(ctx),
 {{range .Fields}}		{{.NamePascal}}: in.{{.NamePascal}},
 {{end}}	})
 }
@@ -64,6 +65,7 @@ func (s *{{.NamePascal}}Service) Update(ctx context.Context, id string, in {{.Na
 		return Err{{.NamePascal}}NotFound
 	}
 	return s.store(ctx, agg, "{{.NamePascal}}Updated", domain.{{.NamePascal}}Updated{
+		Actor: domain.ActorFrom(ctx),
 {{range .Fields}}		{{.NamePascal}}: in.{{.NamePascal}},
 {{end}}	})
 }
@@ -82,7 +84,24 @@ func (s *{{.NamePascal}}Service) Archive(ctx context.Context, id string) error {
 	if agg.Archived {
 		return nil
 	}
-	return s.store(ctx, agg, "{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{})
+	return s.store(ctx, agg, "{{.NamePascal}}Archived", domain.{{.NamePascal}}Archived{Actor: domain.ActorFrom(ctx)})
+}
+
+// Restore records a {{.NamePascal}}Restored event, undoing Archive. It fails
+// if the aggregate never existed, and is idempotent when not archived (a
+// retried Restore is a no-op success rather than an error).
+func (s *{{.NamePascal}}Service) Restore(ctx context.Context, id string) error {
+	agg, err := s.load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if agg.Version == 0 {
+		return Err{{.NamePascal}}NotFound
+	}
+	if !agg.Archived {
+		return nil
+	}
+	return s.store(ctx, agg, "{{.NamePascal}}Restored", domain.{{.NamePascal}}Restored{Actor: domain.ActorFrom(ctx)})
 }
 
 // esb:inject:service-commands

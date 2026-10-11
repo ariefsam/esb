@@ -326,11 +326,29 @@ Entity CRUD dengan **soft delete** (bukan hapus baris).
 esb add recipe crud product name:string price:int64 sku:string
 ```
 
-Menghasilkan: aggregate + event `Created`/`Updated`/`Archived`, service dengan
-command `Create`/`Update`/`Archive` (invariant di aggregate: sudah-ada /
-tidak-ada, Archive idempoten), read model + projection worker, query
-`List<Name>s`/`Get<Name>`, handler HTTP write-side, dan scenario test (jalur
-sukses + gagal).
+Menghasilkan: aggregate + event `Created`/`Updated`/`Archived`/`Restored`,
+service dengan command `Create`/`Update`/`Archive`/`Restore` (invariant di
+aggregate: sudah-ada / tidak-ada, Archive dan Restore idempoten), read model +
+projection worker, **activity log**, query `List<Name>s`/`Get<Name>`/
+`List<Name>Activities`, handler HTTP write-side (POST) dan read-side (GET
+`list`/`get`/`activities`), dan scenario test (jalur sukses + gagal).
+
+**Activity log** — tabel `<name>_activities`, satu baris per event: `action`
+(`created`/`updated`/`archived`/`restored`), `changes` (nilai lama → baru per
+field yang berubah), `actor_id`/`actor_name`, `occurred_at`. Ditulis worker di
+transaksi yang sama dengan read model.
+
+- Actor diambil dari `domain.ActorFrom(ctx)`. Isi dari identitas yang sudah
+  terautentikasi di middleware auth, bukan dari header/body kiriman client:
+  `r.WithContext(domain.WithActor(r.Context(), domain.Actor{ActorID: ..., ActorName: ...}))`.
+  Tanpa actor, event dicatat sebagai `actor_id` `xxxx` / `actor_name` `system`.
+- `--activity-redact email,phone` — field ini dicatat "berubah" tanpa nilainya,
+  supaya data pribadi tidak tersalin ke tabel activity.
+- Nama field `actor`, `actor_id`, `actor_name` dicadangkan.
+
+```bash
+esb add recipe crud customer email:string display_name:string --activity-redact email
+```
 
 #### `esb add recipe ledger <name>`
 
