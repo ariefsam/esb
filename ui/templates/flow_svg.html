@@ -1,0 +1,46 @@
+{{/* flow_svg draws a FlowSVG. The flow page and the aggregate editor share it;
+     the editor also fetches it alone (/editor/{aggregate}/diagram) after a save. */}}
+{{define "flow_svg"}}<svg viewBox="0 0 {{.Width}} {{.Height}}" style="min-width: {{.Width}}px"
+     data-width="{{.Width}}" role="img" aria-label="Diagram alur kode proyek" class="flow-svg" id="flow-svg">
+  <defs>
+    <marker id="flow-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" class="flow-arrow-head" />
+    </marker>
+  </defs>
+
+  <g class="flow-lanes">
+    {{range .Lanes}}
+    <rect x="2" y="{{.Y}}" width="{{$.LaneW}}" height="{{.H}}" rx="8" class="flow-lane{{if .Alt}} flow-lane-alt{{end}}" />
+    <text x="2" y="{{.TitleY}}" dx="10" class="flow-lane-title">{{.Title}}</text>
+    {{end}}
+  </g>
+
+  <g class="flow-edges">
+    {{range .Edges}}
+    <path d="{{.Path}}" data-from="{{.From}}" data-to="{{.To}}"
+          class="flow-edge{{if .Inferred}} flow-edge-inferred{{else if eq .Op "read"}} flow-edge-read{{else if eq .Op "write"}} flow-edge-write{{else if eq .Op "rm-read"}} flow-edge-rm{{else if eq .Op "rm-write"}} flow-edge-rm flow-edge-rm-write{{else}} flow-edge-call{{end}}"
+          marker-end="url(#flow-arrow)" />
+    {{end}}
+  </g>
+
+  <g class="flow-nodes">
+    {{range .Nodes}}
+    <g class="flow-node flow-node-{{.Kind}}{{if .Warn}} flow-node-warn{{end}}" data-id="{{.ID}}" data-label="{{.Full}}"
+       {{if .File}}data-file="{{.File}}" data-line="{{.Line}}" {{end}}tabindex="0" role="button" aria-label="Sorot jalur {{.Full}}">
+      <title>{{.Full}}</title>
+      <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6" />
+      <text x="{{.X}}" y="{{.LabelY}}" dx="10" class="flow-node-label">{{.Label}}</text>
+      <text x="{{.X}}" y="{{.SubY}}" dx="10" class="flow-node-sub">{{.Sub}}</text>
+    </g>
+    {{end}}
+  </g>
+
+  <g class="flow-head" id="flow-head">
+    <rect x="0" y="0" width="{{.Width}}" height="30" class="flow-head-bg" />
+    {{range .Columns}}
+    <text x="{{.X}}" y="20" class="flow-col-title">{{.Title}} ({{.Count}})</text>
+    {{end}}
+  </g>
+</svg>
+{{end}}

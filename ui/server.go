@@ -9,6 +9,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/ariefsam/esb/inspector"
 )
 
 // Server is the HTTP front-end exposed by `esb ui`. It owns the run
@@ -90,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/", s.routeRoot)
 	mux.HandleFunc("/aggregates/", s.handleAggregate)
+	mux.HandleFunc("/editor/", s.handleEditor)
 	mux.HandleFunc("/flow", s.handleFlow)
 	mux.HandleFunc("/flow.json", s.handleFlowJSON)
 	mux.HandleFunc("/flow/source", s.handleFlowSource)
@@ -163,7 +166,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Cache-Control", "no-store")
 		csp := "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-		if r.URL.Path == "/flow" {
+		if r.URL.Path == "/flow" || strings.HasPrefix(r.URL.Path, "/editor/") {
 			// The embedded Monaco editor injects <style> elements and ships its
 			// icon font as a data: URI. Scripts stay locked to 'self'.
 			csp += "; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
@@ -264,6 +267,16 @@ func (s *Server) renderLayout(w http.ResponseWriter, status int, layout Layout) 
 	if layout.JSPath == "" {
 		layout.JSPath = "/static/app.js"
 	}
+	if layout.Aggregates == nil {
+		// The sidebar lists every aggregate on every page. A project that
+		// does not scan still renders, with an empty list.
+		if m, err := inspector.Scan(s.projectRoot); err == nil {
+			layout.Module = m.ModuleName
+			for _, a := range m.Aggregate {
+				layout.Aggregates = append(layout.Aggregates, a.Name)
+			}
+		}
+	}
 	if err := s.templates.ExecuteTemplate(w, "layout", layout); err != nil {
 		// We've already written headers so we can only log. A bad
 		// template is a startup error and should not happen in
@@ -294,6 +307,8 @@ func (s *Server) renderBody(page interface{}) string {
 		tmplName = "migrate"
 	case DeleteEventPage:
 		tmplName = "delete_event"
+	case EditorPage:
+		tmplName = "editor"
 	case ErrorPage:
 		tmplName = "error"
 	default:

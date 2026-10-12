@@ -976,6 +976,18 @@ func (s *RunStore) evictOldestCompletedLocked() bool {
 	return true
 }
 
+// Exclusive runs fn while no command can start, so a direct file write from
+// the editor never interleaves with a generator rewriting the same files. It
+// returns ErrConflict, without calling fn, while a command is running.
+func (s *RunStore) Exclusive(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		return ErrConflict
+	}
+	return fn()
+}
+
 // ErrConflict signals that the UI rejected a second run while one is
 // already in progress.
 var ErrConflict = errors.New("another command is already running")

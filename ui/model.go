@@ -28,6 +28,7 @@ const (
 	PageStorage         PageKind = "storage"
 	PageMigrate         PageKind = "migrate"
 	PageDeleteEvent     PageKind = "delete_event"
+	PageEditor          PageKind = "editor"
 	PageError           PageKind = "error"
 )
 
@@ -44,6 +45,15 @@ type Layout struct {
 	Nav      Nav
 	Flash    string // optional banner text (e.g. "Project refreshed")
 	Run      *Run   // active run pointer if the user just executed a command
+
+	// Wide drops the page width limit, header and footer (the editor).
+	Wide bool
+	// Aggregate is the aggregate open in the editor, highlighted in the sidebar.
+	Aggregate string
+	// Module and Aggregates fill the sidebar; renderLayout scans the project
+	// for them when a handler leaves them empty.
+	Module     string
+	Aggregates []string
 }
 
 // Nav holds the navigation links rendered into the layout header.
@@ -100,6 +110,18 @@ type AggregateDetailPage struct {
 	Queries      []inspector.Query
 	Workers      []inspector.Projection
 	Other        []string
+}
+
+// EditorPage is /editor/{aggregate}: the aggregate's flow diagram next to
+// an editable source pane over the files in Files.
+type EditorPage struct {
+	Kind      PageKind
+	Module    string
+	Aggregate string
+	Files     []EditorFile
+	Initial   string // file opened first
+	Line      int    // line revealed in Initial
+	SVG       FlowSVG
 }
 
 // FlowPage is the view-model for `GET /flow`: the derived statistics, the

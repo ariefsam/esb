@@ -6,18 +6,75 @@
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <title>{{.Title}} — esb ui</title>
 <link rel="stylesheet" href="{{.CSSPath}}">
+{{/* Not deferred: it restores the sidebar's open/closed state before the
+     first paint, so the panel does not flash open and then collapse. */}}
+<script src="/static/nav.js"></script>
 </head>
-<body>
-<header class="topbar">
-  <div class="brand">esb <span>ui</span></div>
-  <nav>
-    {{range .Nav.Links}}
-    <a href="{{.Href}}" {{if eq .Key $.Nav.Active}}class="active"{{end}}>{{.Text}}</a>
-    {{end}}
-  </nav>
-  <div class="meta">project: <code>{{.Root}}</code></div>
-</header>
+<body class="app{{if .Wide}} app-wide{{end}}">
+<nav class="rail" aria-label="Navigasi utama">
+  <a class="rail-btn{{if eq .Nav.Active "overview"}} active{{end}}" href="/" data-tip="Overview" aria-label="Overview">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+  </a>
+  <button type="button" class="rail-btn rail-panel{{if .Aggregate}} active{{end}}" data-nav-open="aggregates"
+          data-tip="Aggregates — buka daftar" aria-label="Aggregates: buka daftar" aria-controls="nav-panel">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 21 7.5v9L12 21.5 3 16.5v-9z"/><path d="M3 7.5 12 12.5l9-5M12 12.5v9"/></svg>
+    <span class="rail-badge" aria-hidden="true">›</span>
+  </button>
+  <a class="rail-btn{{if eq .Nav.Active "flow"}} active{{end}}" href="/flow" data-tip="Flow" aria-label="Flow">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6h3a3 3 0 0 1 3 3v.5M8.5 18h3a3 3 0 0 0 3-3v-.5"/></svg>
+  </a>
+  <a class="rail-btn{{if eq .Nav.Active "storage"}} active{{end}}" href="/storage" data-tip="Storage" aria-label="Storage">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+  </a>
+  <a class="rail-btn{{if eq .Nav.Active "commands"}} active{{end}}" href="/commands" data-tip="Commands" aria-label="Commands">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="m7 9 3 3-3 3M12.5 15H17"/></svg>
+  </a>
+  <button type="button" class="rail-btn rail-panel" data-nav-open="search"
+          data-tip="Cari aggregate" aria-label="Cari aggregate" aria-controls="nav-panel">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+  </button>
+  <div class="rail-spacer"></div>
+  <button type="button" class="rail-btn rail-toggle" data-nav-toggle aria-controls="nav-panel" aria-expanded="true"
+          data-tip-open="Tutup panel (Ctrl/⌘+B)" data-tip-closed="Buka panel (Ctrl/⌘+B)" data-tip="Tutup panel (Ctrl/⌘+B)" aria-label="Buka/tutup panel">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path class="rail-chev" d="m15 9-3 3 3 3"/></svg>
+  </button>
+</nav>
 
+<aside class="nav-panel" id="nav-panel" aria-label="Explorer">
+  <div class="nav-head">
+    <a class="nav-brand" href="/">esb <span>ui</span></a>
+    <button type="button" class="nav-close" data-nav-toggle aria-label="Tutup panel" title="Tutup panel (Ctrl/⌘+B)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 7-5 5 5 5"/></svg>
+    </button>
+  </div>
+  <div class="nav-project" title="{{.Root}}">{{if .Module}}{{.Module}}{{else}}proyek{{end}}</div>
+  <a class="nav-link{{if eq .Nav.Active "overview"}} active{{end}}" href="/">Overview</a>
+
+  <input type="search" class="nav-filter" id="nav-filter" placeholder="Filter aggregate…" aria-label="Filter aggregate" autocomplete="off">
+
+  <div class="nav-section">
+    <span>Aggregates</span>
+    <a class="nav-add" href="/commands?command=add-aggregate" title="Tambah aggregate" aria-label="Tambah aggregate">+</a>
+  </div>
+  <ul class="nav-list" id="nav-aggregates">
+    {{range .Aggregates}}
+    <li><a href="/editor/{{.}}" data-name="{{.}}"{{if eq . $.Aggregate}} class="active" aria-current="page"{{end}}><span class="nav-dot" aria-hidden="true"></span>{{.}}</a></li>
+    {{else}}
+    <li class="nav-empty">Belum ada aggregate</li>
+    {{end}}
+  </ul>
+
+  <div class="nav-section"><span>Halaman</span></div>
+  <ul class="nav-list">
+    {{range .Nav.Links}}{{if ne .Key "overview"}}
+    <li><a href="{{.Href}}"{{if eq .Key $.Nav.Active}} class="active"{{end}}>{{.Text}}</a></li>
+    {{end}}{{end}}
+  </ul>
+
+  <div class="nav-foot" title="{{.Root}}">project: <code>{{.Root}}</code></div>
+</aside>
+
+<div class="app-main">
 {{if .Flash}}
 <div class="flash">{{.Flash}}</div>
 {{end}}
@@ -26,9 +83,12 @@
 {{.Body | safeHTML}}
 </main>
 
+{{if not .Wide}}
 <footer>
   <small>Local-only admin UI — bound to {{.Root}}. Refresh project setelah menjalankan command.</small>
 </footer>
+{{end}}
+</div>
 
 <script defer src="{{.JSPath}}"></script>
 </body>

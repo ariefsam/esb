@@ -89,49 +89,7 @@
   </p>
   {{else}}
   <div class="flow-canvas" id="flow-canvas">
-    <svg viewBox="0 0 {{.SVG.Width}} {{.SVG.Height}}" style="min-width: {{.SVG.Width}}px"
-         data-width="{{.SVG.Width}}" role="img" aria-label="Diagram alur kode proyek" class="flow-svg" id="flow-svg">
-      <defs>
-        <marker id="flow-arrow" viewBox="0 0 8 8" refX="7" refY="4"
-                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L8,4 L0,8 z" class="flow-arrow-head" />
-        </marker>
-      </defs>
-
-      <g class="flow-lanes">
-        {{range .SVG.Lanes}}
-        <rect x="2" y="{{.Y}}" width="{{$.SVG.LaneW}}" height="{{.H}}" rx="8" class="flow-lane{{if .Alt}} flow-lane-alt{{end}}" />
-        <text x="2" y="{{.TitleY}}" dx="10" class="flow-lane-title">{{.Title}}</text>
-        {{end}}
-      </g>
-
-      <g class="flow-edges">
-        {{range .SVG.Edges}}
-        <path d="{{.Path}}" data-from="{{.From}}" data-to="{{.To}}"
-              class="flow-edge{{if .Inferred}} flow-edge-inferred{{else if eq .Op "read"}} flow-edge-read{{else if eq .Op "write"}} flow-edge-write{{else if eq .Op "rm-read"}} flow-edge-rm{{else if eq .Op "rm-write"}} flow-edge-rm flow-edge-rm-write{{else}} flow-edge-call{{end}}"
-              marker-end="url(#flow-arrow)" />
-        {{end}}
-      </g>
-
-      <g class="flow-nodes">
-        {{range .SVG.Nodes}}
-        <g class="flow-node flow-node-{{.Kind}}{{if .Warn}} flow-node-warn{{end}}" data-id="{{.ID}}" data-label="{{.Full}}"
-           {{if .File}}data-file="{{.File}}" data-line="{{.Line}}" {{end}}tabindex="0" role="button" aria-label="Sorot jalur {{.Full}}">
-          <title>{{.Full}}</title>
-          <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6" />
-          <text x="{{.X}}" y="{{.LabelY}}" dx="10" class="flow-node-label">{{.Label}}</text>
-          <text x="{{.X}}" y="{{.SubY}}" dx="10" class="flow-node-sub">{{.Sub}}</text>
-        </g>
-        {{end}}
-      </g>
-
-      <g class="flow-head" id="flow-head">
-        <rect x="0" y="0" width="{{.SVG.Width}}" height="30" class="flow-head-bg" />
-        {{range .SVG.Columns}}
-        <text x="{{.X}}" y="20" class="flow-col-title">{{.Title}} ({{.Count}})</text>
-        {{end}}
-      </g>
-    </svg>
+    {{template "flow_svg" .SVG}}
   </div>
   {{end}}
   </div>

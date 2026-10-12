@@ -1,0 +1,71 @@
+{{define "editor"}}
+<div class="ed" id="ed" data-aggregate="{{.Aggregate}}" data-initial="{{.Initial}}" data-line="{{.Line}}"
+     data-monaco-base="/static/monaco/vs">
+  <div class="ed-bar">
+    <div class="ed-crumb">{{.Module}} / <strong>{{.Aggregate}}</strong></div>
+    {{if .Files}}
+    <select class="ed-file" id="ed-file" aria-label="File yang dibuka">
+      {{$group := ""}}{{range .Files}}{{if ne .Group $group}}{{if $group}}</optgroup>{{end}}<optgroup label="{{.Group}}">{{$group = .Group}}{{end}}
+        <option value="{{.Path}}"{{if eq .Path $.Initial}} selected{{end}}>{{.Path}}</option>{{end}}{{if $group}}</optgroup>{{end}}
+    </select>
+    {{end}}
+    <div class="ed-spacer"></div>
+    <div class="ed-views" role="group" aria-label="Tampilan">
+      <button type="button" data-view="split" aria-pressed="true">Split</button>
+      <button type="button" data-view="diagram" aria-pressed="false">Diagram</button>
+      <button type="button" data-view="code" aria-pressed="false">Code</button>
+    </div>
+    <button type="button" class="btn small" id="ed-check" title="go vet ./...">Check</button>
+    <button type="button" class="btn small" id="ed-history-open">History</button>
+    <button type="button" class="btn small" id="ed-save" disabled title="Simpan (Ctrl/⌘+S)">Save</button>
+    <button type="button" class="btn small" id="ed-commit-open">Commit</button>
+  </div>
+
+  <div class="ed-body view-split" id="ed-body">
+    <div class="ed-diagram" id="ed-diagram" aria-label="Diagram alur {{.Aggregate}}">
+      {{if .SVG.Empty}}<p class="ed-empty">Belum ada alur untuk aggregate ini.</p>{{else}}{{template "flow_svg" .SVG}}{{end}}
+    </div>
+    <div class="ed-code">
+      {{if .Files}}<div class="ed-monaco" id="ed-monaco"></div>
+      {{else}}<p class="ed-empty">Tidak ada file Go yang bisa dibuka untuk aggregate ini.</p>{{end}}
+    </div>
+  </div>
+
+  <div class="ed-problems" id="ed-problems" hidden></div>
+  <div class="ed-status" id="ed-status" role="status" aria-live="polite">Memuat editor…</div>
+
+  <dialog class="ed-dialog" id="ed-history">
+    <div class="ed-dialog-head">
+      <strong id="ed-history-title">History</strong>
+      <button type="button" class="btn small" id="ed-history-restore" disabled>Pulihkan ke editor</button>
+      <button type="button" class="btn small" id="ed-history-close">Tutup</button>
+    </div>
+    <div class="ed-dialog-body">
+      <p class="muted small" id="ed-history-status"></p>
+      <div class="ed-history">
+        <div class="ed-history-list" id="ed-history-list"></div>
+        <div class="ed-diff" id="ed-diff"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="ed-dialog ed-commit" id="ed-commit">
+    <form method="dialog" id="ed-commit-form">
+      <div class="ed-dialog-head"><strong>Commit file aggregate {{.Aggregate}}</strong></div>
+      <div class="ed-dialog-body">
+        <label for="ed-commit-message">Pesan commit</label>
+        <textarea id="ed-commit-message" required maxlength="4000" placeholder="feat({{.Aggregate}}): …"></textarea>
+        <p class="muted small">Hanya file berikut yang di-commit; perubahan lain di repo tidak disentuh:</p>
+        <ul class="ed-commit-files">{{range .Files}}<li><code>{{.Path}}</code></li>{{end}}</ul>
+        <p class="small" id="ed-commit-status"></p>
+        <div class="ed-dialog-actions">
+          <button type="button" class="btn small" id="ed-commit-cancel">Batal</button>
+          <button type="submit" id="ed-commit-submit">Commit</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+</div>
+<link rel="stylesheet" href="/static/monaco/vs/editor/editor.main.css">
+<script src="/static/editor.js"></script>
+{{end}}
