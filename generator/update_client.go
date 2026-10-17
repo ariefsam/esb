@@ -31,6 +31,11 @@ var clientFiles = []clientFile{
 	{"eventstore_local_store.go.tmpl", "eventstore/local_store.go", ClientModeEmbedded},
 	{"repository_local_adapter.go.tmpl", "repository/local_adapter.go", ClientModeEmbedded},
 	{"eventstore_fake_store.go.tmpl", "eventstore/fake_store.go", ""},
+	// vault.go holds what client.go and the adapters' new methods need in
+	// every mode. fake_vault.go is left out on purpose: it touches
+	// Event.Protected, a field projects older than it do not have.
+	{"eventstore_vault.go.tmpl", "eventstore/vault.go", ""},
+	{"domain_vault.go.tmpl", "domain/vault.go", ""},
 	{"domain_projection_wait.go.tmpl", "domain/projection_wait.go", ""},
 	{"projection_wait.go.tmpl", "projection/wait.go", ""},
 }

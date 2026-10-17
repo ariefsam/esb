@@ -1,0 +1,116 @@
+package eventstore
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+)
+
+// Vault scopes. The ESB server only accepts Event.Protected from tokens
+// carrying ScopeVaultEncrypt, returns it in plaintext only to
+// ScopeVaultDecrypt, and lets ScopeVaultShred call ShredSubjects. Scopes
+// are claims the token holder chooses; they keep code paths apart, they
+// do not separate credentials.
+const (
+	ScopeVaultEncrypt = "vault:encrypt"
+	ScopeVaultDecrypt = "vault:decrypt"
+	ScopeVaultShred   = "vault:shred"
+)
+
+// TokenScopes is added as the "scopes" claim to every token the HTTP
+// client signs. Set it once at startup (wire does, from ESB_SCOPES).
+var TokenScopes []string
+
+// Secret is an application secret: a DSN, a private key, a token.
+type Secret struct {
+	Ref       string `json:"ref"`
+	Value     []byte `json:"-"`
+	Version   int64  `json:"version"` // also the ETag of the ESB server
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// ErrSecretNotFound is returned when a secret ref does not exist.
+var ErrSecretNotFound = errors.New("event store: secret not found")
+
+// ErrSecretPrecondition is returned when a conditional secret write does
+// not hold: creating a ref that exists, or replacing a stale version.
+var ErrSecretPrecondition = errors.New("event store: secret precondition failed")
+
+// SecretReader reads application secrets. The HTTP client reads them from
+// the ESB server's vault; EnvSecrets reads them from the environment, so
+// code that loads its configuration works the same in both modes.
+type SecretReader interface {
+	GetSecret(ctx context.Context, ref string) (Secret, error)
+	// GetSecrets returns the secrets found, keyed by ref, and the refs
+	// that do not exist.
+	GetSecrets(ctx context.Context, refs ...string) (map[string]Secret, []string, error)
+}
+
+// EnvSecrets is the SecretReader of embedded mode: there is no ESB server
+// to ask, so ref "billing/db/dsn" is read from SECRET_BILLING_DB_DSN.
+type EnvSecrets struct{}
+
+// SecretEnvName is the environment variable EnvSecrets reads for ref:
+// "SECRET_" + ref upper-cased, every character outside A-Z and 0-9
+// replaced by "_".
+func SecretEnvName(ref string) string {
+	var b strings.Builder
+	b.WriteString("SECRET_")
+	for _, r := range strings.ToUpper(ref) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// GetSecret implements SecretReader.
+func (EnvSecrets) GetSecret(_ context.Context, ref string) (Secret, error) {
+	v, ok := os.LookupEnv(SecretEnvName(ref))
+	if !ok {
+		return Secret{}, ErrSecretNotFound
+	}
+	return Secret{Ref: ref, Value: []byte(v)}, nil
+}
+
+// GetSecrets implements SecretReader.
+func (e EnvSecrets) GetSecrets(ctx context.Context, refs ...string) (map[string]Secret, []string, error) {
+	found := make(map[string]Secret, len(refs))
+	var missing []string
+	for _, ref := range refs {
+		s, err := e.GetSecret(ctx, ref)
+		if errors.Is(err, ErrSecretNotFound) {
+			missing = append(missing, ref)
+			continue
+		}
+		found[ref] = s
+	}
+	return found, missing, nil
+}
+
+// Shredder destroys the keys of data subjects ("type:id", e.g.
+// "customer:cust-7f3a"). Every Event.Protected entry of a shredded
+// subject becomes unreadable for good, while Event.Data stays intact.
+// Both event store adapters implement it.
+type Shredder interface {
+	ShredSubjects(ctx context.Context, subjects ...string) ([]string, error)
+}
+
+// VaultErrorCode reports whether an Event.Protected value is an error
+// marker instead of plaintext, and returns its code: "key_shredded",
+// "key_not_found", "decrypt_failed", "vault_unavailable" or
+// "internal_error".
+func VaultErrorCode(v json.RawMessage) (string, bool) {
+	var marker struct {
+		Code string `json:"$error"`
+	}
+	if json.Unmarshal(v, &marker) != nil || marker.Code == "" {
+		return "", false
+	}
+	return marker.Code, true
+}

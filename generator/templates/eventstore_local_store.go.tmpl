@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -60,6 +62,76 @@ type LockRow struct {
 }
 
 func (LockRow) TableName() string { return "locks" }
+
+// ProtectedRow is one subject's Event.Protected payload of one event.
+// Embedded mode keeps it UNENCRYPTED — use EVENT_STORE_MODE=esb-server for
+// real personal data, where the ESB vault encrypts it per subject. It
+// lives in its own table so ShredSubjects can delete a subject's data
+// without rewriting events.
+type ProtectedRow struct {
+	EventID uint   `gorm:"column:event_id;primaryKey"`
+	Subject string `gorm:"column:subject;primaryKey;index"`
+	Payload []byte `gorm:"column:payload;not null"`
+}
+
+func (ProtectedRow) TableName() string { return "event_protected" }
+
+var protectedWarnOnce sync.Once
+
+func warnUnencryptedProtected() {
+	protectedWarnOnce.Do(func() {
+		slog.Warn("embedded event store keeps Event.Protected UNENCRYPTED; use EVENT_STORE_MODE=esb-server for real personal data")
+	})
+}
+
+// protectedRows turns one event's Protected map into rows.
+func protectedRows(eventID uint, protected map[string]json.RawMessage) []ProtectedRow {
+	rows := make([]ProtectedRow, 0, len(protected))
+	for subject, payload := range protected {
+		rows = append(rows, ProtectedRow{EventID: eventID, Subject: subject, Payload: []byte(payload)})
+	}
+	return rows
+}
+
+// loadProtected returns the protected payloads of the given events, keyed
+// by event ID. A store that predates the event_protected table has none.
+func (s *LocalStore) loadProtected(ctx context.Context, eventIDs []uint) (map[uint]map[string]json.RawMessage, error) {
+	if len(eventIDs) == 0 || !s.db.Migrator().HasTable(&ProtectedRow{}) {
+		return nil, nil
+	}
+	out := map[uint]map[string]json.RawMessage{}
+	const chunk = 500
+	for start := 0; start < len(eventIDs); start += chunk {
+		end := min(start+chunk, len(eventIDs))
+		var rows []ProtectedRow
+		if err := s.db.WithContext(ctx).Where("event_id IN ?", eventIDs[start:end]).Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("load protected: %w", err)
+		}
+		for _, r := range rows {
+			if out[r.EventID] == nil {
+				out[r.EventID] = map[string]json.RawMessage{}
+			}
+			out[r.EventID][r.Subject] = json.RawMessage(r.Payload)
+		}
+	}
+	return out, nil
+}
+
+// ShredSubjects implements Shredder. Embedded mode has no keys to destroy,
+// so it deletes every protected payload of the subjects; events and their
+// Data are untouched. Unlike the ESB vault it leaves no tombstone: the
+// same subject can be written again afterwards.
+func (s *LocalStore) ShredSubjects(ctx context.Context, subjects ...string) ([]string, error) {
+	if len(subjects) == 0 {
+		return nil, errors.New("shred: no subjects")
+	}
+	if s.db.Migrator().HasTable(&ProtectedRow{}) {
+		if err := s.db.WithContext(ctx).Where("subject IN ?", subjects).Delete(&ProtectedRow{}).Error; err != nil {
+			return nil, fmt.Errorf("shred: %w", err)
+		}
+	}
+	return subjects, nil
+}
 
 // LocalStore is the embedded EventRepository. It is safe for
 // concurrent use by StoreAtomic because GORM serializes writes
@@ -131,6 +203,12 @@ func (s *LocalStore) StoreAtomic(ctx context.Context, e Event, expectedVersion i
 		if row.ID == 0 {
 			return ErrConflict
 		}
+		if len(e.Protected) > 0 {
+			warnUnencryptedProtected()
+			if err := tx.Create(protectedRows(row.ID, e.Protected)).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if errors.Is(err, ErrConflict) {
@@ -150,6 +228,7 @@ func (s *LocalStore) StoreAtomic(ctx context.Context, e Event, expectedVersion i
 		CorrelationID:  row.CorrelationID,
 		CausationID:    row.CausationID,
 		IdempotencyKey: row.IdempotencyKey,
+		Protected:      e.Protected,
 	}, nil
 }
 
@@ -165,7 +244,11 @@ func (s *LocalStore) Retrieve(ctx context.Context, aggregateID, aggregateName st
 	if err != nil {
 		return nil, fmt.Errorf("retrieve events: %w", err)
 	}
-	return rowsToEvents(rows), nil
+	protected, err := s.loadProtected(ctx, rowIDs(rows))
+	if err != nil {
+		return nil, err
+	}
+	return rowsToEvents(rows, protected), nil
 }
 
 // FetchAll streams events across one or more aggregate types with
@@ -184,7 +267,11 @@ func (s *LocalStore) FetchAll(ctx context.Context, aggregateNames []string, afte
 	if err := q.Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("fetch events: %w", err)
 	}
-	return rowsToEvents(rows), nil
+	protected, err := s.loadProtected(ctx, rowIDs(rows))
+	if err != nil {
+		return nil, err
+	}
+	return rowsToEvents(rows, protected), nil
 }
 
 // StoreSnapshot persists a new snapshot row for an aggregate instance.
@@ -234,7 +321,7 @@ func (s *LocalStore) LatestSnapshot(ctx context.Context, aggregateID, aggregateN
 	}, nil
 }
 
-func rowsToEvents(rows []EventRow) []Event {
+func rowsToEvents(rows []EventRow, protected map[uint]map[string]json.RawMessage) []Event {
 	out := make([]Event, len(rows))
 	for i, r := range rows {
 		out[i] = Event{
@@ -248,18 +335,29 @@ func rowsToEvents(rows []EventRow) []Event {
 			CorrelationID:  r.CorrelationID,
 			CausationID:    r.CausationID,
 			IdempotencyKey: r.IdempotencyKey,
+			Protected:      protected[r.ID],
 		}
 	}
 	return out
 }
 
-// MigrateLocalStore runs AutoMigrate for the events, snapshots, and
-// locks tables. Call this once at startup before constructing LocalStore.
+// rowIDs returns the IDs of rows, for loadProtected.
+func rowIDs(rows []EventRow) []uint {
+	ids := make([]uint, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids
+}
+
+// MigrateLocalStore runs AutoMigrate for the events, snapshots, locks and
+// event_protected tables. Call this once at startup before constructing
+// LocalStore.
 func MigrateLocalStore(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("nil db")
 	}
-	return db.AutoMigrate(&EventRow{}, &SnapshotRow{}, &LockRow{})
+	return db.AutoMigrate(&EventRow{}, &SnapshotRow{}, &LockRow{}, &ProtectedRow{})
 }
 
 // AcquireLock implements Locker. Embedded mode is a single process,

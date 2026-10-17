@@ -695,7 +695,7 @@ esb update-client --mode esb       # hanya client ESB server
 |---|---|
 | `eventstore/client.go`, `repository/eventstore_adapter.go` | `esb` |
 | `eventstore/local_store.go`, `repository/local_adapter.go` | `embedded` |
-| `eventstore/fake_store.go`, `domain/projection_wait.go`, `projection/wait.go` | semua |
+| `eventstore/fake_store.go`, `eventstore/vault.go`, `domain/vault.go`, `domain/projection_wait.go`, `projection/wait.go` | semua |
 | `service/*.go`, `projection/*.go`: method `storeAndWait` / `WaitPast` saja | semua |
 
 - File yang belum ada dibuat utuh.
@@ -724,6 +724,15 @@ Dengan begitu method yang sengaja dihapus tidak muncul lagi.
   `domain.StoreAndWaitProjectionWorker` dari command-nya sendiri.
 - Service yang sudah punya `storeEvent` tapi tidak punya `storeAndWait`
   dianggap sengaja menghapusnya, jadi tidak disentuh.
+
+Proyek yang dibuat sebelum ada dukungan vault mendapat **secret** dan
+`ShredSubjects` secara utuh dari `update-client`. Dukungan `Event.Protected`
+tidak bisa ditambahkan otomatis, karena perlu field baru di `Event` dan
+`StoreRequest` serta perubahan di `StoreAtomic`, `Retrieve`, `FetchAll`,
+`rowsToEvents`, dan `MigrateLocalStore` — semuanya muncul sebagai `~`.
+Salin bagian itu dari template kalau proyek lama butuh data pribadi
+terenkripsi. `wire/wire.go` juga tidak disentuh: tambahkan `Secrets`,
+`Shredder`, dan `ESB_SCOPES` dengan tangan (lihat [Secret Aplikasi](#secret-aplikasi)).
 
 ---
 
@@ -903,6 +912,45 @@ case errors.Is(err, domain.ErrLockBusy):
 ```
 
 Bekerja di kedua mode (embedded: tabel `locks` lokal dengan TTL, wait pakai polling sederhana karena single-process; esb-server: endpoint `/locks/*` dengan long-poll cross-process). `esb ui` (`/storage`) menampilkan isi tabel `locks` untuk mode embedded.
+
+### Secret Aplikasi
+
+`wire.App.Secrets` (tipe `domain.SecretReader`) membaca konfigurasi rahasia seperti DSN database, private key, atau API token, dengan kode yang sama di kedua mode:
+
+```go
+dsn, err := app.Secrets.GetSecret(ctx, "billing/db/dsn")
+if errors.Is(err, domain.ErrSecretNotFound) { /* belum diisi */ }
+db := openDB(string(dsn.Value))
+
+found, missing, err := app.Secrets.GetSecrets(ctx, "billing/db/dsn", "billing/tls/key.pem")
+```
+
+| Mode | Sumber |
+|---|---|
+| `esb-server` | Vault ESB (`/vault/secrets`), terenkripsi per secret dan tercatat di audit server |
+| `embedded` | Env var `SECRET_<REF>`: ref `billing/db/dsn` dibaca dari `SECRET_BILLING_DB_DSN` (`eventstore.SecretEnvName`) |
+
+Untuk mengisi secret di vault ESB, `eventstore.Client` juga punya `CreateSecret` (`If-None-Match: *`), `PutSecret` (dengan `ifVersion` untuk `If-Match`), dan `DeleteSecret`. Error `eventstore.ErrSecretPrecondition` berarti ref sudah ada atau versinya sudah berubah. Kredensial ESB sendiri (`private.pem`, `ESB_URL`) tetap harus datang dari env.
+
+### Data Pribadi (`Event.Protected`) dan Shred
+
+Data pribadi ditaruh di `Event.Protected`, terpisah dari `Data`, dan dikelompokkan per subjek `type:id`:
+
+```go
+e, _ := domain.NewEvent(domain.OrderAggregateName, orderID, "OrderPlaced", version, payload)
+e.Protected = map[string]json.RawMessage{
+    "customer:" + customerID: json.RawMessage(`{"email":"user@example.com"}`),
+}
+```
+
+Saat membaca, cek setiap nilai dengan `domain.VaultErrorCode`: subjek yang sudah di-shred dikembalikan sebagai marker `key_shredded`, bukan plaintext. Untuk memenuhi permintaan penghapusan data, panggil `app.Shredder.ShredSubjects(ctx, "customer:"+customerID)`.
+
+| Mode | Perilaku |
+|---|---|
+| `esb-server` | Vault ESB mengenkripsi setiap subjek dengan key-nya sendiri. Shred menghapus key-nya, sehingga data subjek tidak terbaca di semua event, sementara `Data` tetap utuh. Butuh scope di `ESB_SCOPES`: `vault:encrypt` dan `vault:decrypt` (default), plus `vault:shred` di proses yang menjalankan penghapusan. |
+| `embedded` | **Disimpan tanpa enkripsi** di tabel `event_protected`, dengan peringatan di log. Shred menghapus barisnya. Jangan dipakai untuk data pribadi sungguhan; gunakan `esb-server`. |
+
+ID subjek tersimpan polos dan tidak ikut terhapus saat shred, jadi pakai ID internal yang opaque, bukan email atau nomor telepon. `eventstore.NewFakeStore()` juga menyimpan `Protected` dan mendukung `ShredSubjects`, sehingga alur penghapusan bisa diuji tanpa server.
 
 ### Testing dengan Given-When-Then
 

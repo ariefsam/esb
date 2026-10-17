@@ -55,3 +55,9 @@ func (a *LocalAdapter) RefreshLock(ctx context.Context, key, ownerToken string, 
 func (a *LocalAdapter) GetLock(ctx context.Context, key string) (eventstore.Lock, error) {
 	return a.store.GetLock(ctx, key)
 }
+
+// ShredSubjects implements eventstore.Shredder. Embedded mode keeps
+// protected data unencrypted, so shredding deletes it instead.
+func (a *LocalAdapter) ShredSubjects(ctx context.Context, subjects ...string) ([]string, error) {
+	return a.store.ShredSubjects(ctx, subjects...)
+}

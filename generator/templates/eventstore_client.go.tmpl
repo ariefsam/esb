@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,10 @@ type StoreRequest struct {
 	IdempotencyKey  string          `json:"idempotency_key,omitempty"`
 	CorrelationID   string          `json:"correlation_id,omitempty"`
 	CausationID     string          `json:"causation_id,omitempty"`
+	// Protected holds personal data keyed by subject "type:id". The ESB
+	// server encrypts each subject's JSON object under that subject's key;
+	// ShredSubjects makes it unreadable for good. Needs ScopeVaultEncrypt.
+	Protected map[string]json.RawMessage `json:"protected,omitempty"`
 }
 
 // Event is the server representation of a stored event.
@@ -70,6 +75,10 @@ type Event struct {
 	CorrelationID  string          `json:"CorrelationID"`
 	CausationID    string          `json:"CausationID"`
 	IdempotencyKey string          `json:"IdempotencyKey"`
+	// Protected is the per-subject personal data, decrypted. The ESB server
+	// returns it only to ScopeVaultDecrypt; a subject it cannot open maps
+	// to an error marker — check values with VaultErrorCode.
+	Protected map[string]json.RawMessage `json:"Protected,omitempty"`
 }
 
 // Snapshot is the server representation of an aggregate snapshot.
@@ -295,6 +304,12 @@ func (c *Client) GetLock(ctx context.Context, key string) (Lock, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	return c.doWithHeaders(ctx, method, path, body, nil, out)
+}
+
+// doWithHeaders is do with extra request headers (the secret API's
+// If-Match / If-None-Match preconditions).
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body any, headers map[string]string, out any) error {
 	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -310,6 +325,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	token, err := c.signedToken()
@@ -348,7 +366,123 @@ func (c *Client) signedToken() (string, error) {
 	if c.issuer != "" {
 		claims["iss"] = c.issuer
 	}
+	if len(TokenScopes) > 0 {
+		claims["scopes"] = TokenScopes
+	}
 	return jwt.NewWithClaims(jwt.SigningMethodES256, claims).SignedString(c.privateKey)
+}
+
+// ShredSubjects implements Shredder against the ESB vault (needs
+// ScopeVaultShred). All subjects are shredded in one transaction.
+func (c *Client) ShredSubjects(ctx context.Context, subjects ...string) ([]string, error) {
+	var out struct {
+		Shredded []string `json:"shredded"`
+	}
+	err := c.do(ctx, http.MethodPost, "/vault/subjects/shred", map[string]any{"subjects": subjects}, &out)
+	return out.Shredded, err
+}
+
+// secretPath escapes each segment of a secret ref ("billing/db/dsn").
+func secretPath(ref string) string {
+	segs := strings.Split(ref, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return "/vault/secrets/" + strings.Join(segs, "/")
+}
+
+func mapSecretError(err error) error {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		switch he.StatusCode {
+		case http.StatusNotFound:
+			return ErrSecretNotFound
+		case http.StatusPreconditionFailed:
+			return ErrSecretPrecondition
+		}
+	}
+	return err
+}
+
+func ifMatch(version int64) map[string]string {
+	if version <= 0 {
+		return nil
+	}
+	return map[string]string{"If-Match": `"` + strconv.FormatInt(version, 10) + `"`}
+}
+
+// secretJSON is a Secret on the wire, its value base64-encoded.
+type secretJSON struct {
+	Secret
+	Value string `json:"value"`
+}
+
+func (j secretJSON) decode() (Secret, error) {
+	v, err := base64.StdEncoding.DecodeString(j.Value)
+	if err != nil {
+		return Secret{}, fmt.Errorf("decode secret %s: %w", j.Ref, err)
+	}
+	s := j.Secret
+	s.Value = v
+	return s, nil
+}
+
+// CreateSecret stores value under ref only if ref does not exist yet
+// (If-None-Match: *); an existing ref returns ErrSecretPrecondition.
+func (c *Client) CreateSecret(ctx context.Context, ref string, value []byte) (Secret, error) {
+	return c.putSecret(ctx, ref, value, map[string]string{"If-None-Match": "*"})
+}
+
+// PutSecret stores value under ref, replacing any previous value. With
+// ifVersion > 0 it replaces only that version and returns
+// ErrSecretPrecondition otherwise.
+func (c *Client) PutSecret(ctx context.Context, ref string, value []byte, ifVersion int64) (Secret, error) {
+	return c.putSecret(ctx, ref, value, ifMatch(ifVersion))
+}
+
+func (c *Client) putSecret(ctx context.Context, ref string, value []byte, headers map[string]string) (Secret, error) {
+	var out Secret
+	body := map[string]string{"value": base64.StdEncoding.EncodeToString(value)}
+	if err := c.doWithHeaders(ctx, http.MethodPut, secretPath(ref), body, headers, &out); err != nil {
+		return Secret{}, mapSecretError(err)
+	}
+	out.Value = value
+	return out, nil
+}
+
+// GetSecret implements SecretReader against the ESB vault.
+func (c *Client) GetSecret(ctx context.Context, ref string) (Secret, error) {
+	var out secretJSON
+	if err := c.do(ctx, http.MethodGet, secretPath(ref), nil, &out); err != nil {
+		return Secret{}, mapSecretError(err)
+	}
+	return out.decode()
+}
+
+// GetSecrets implements SecretReader: up to 100 refs in one call.
+func (c *Client) GetSecrets(ctx context.Context, refs ...string) (map[string]Secret, []string, error) {
+	var out struct {
+		Secrets map[string]secretJSON `json:"secrets"`
+		Missing []string              `json:"missing"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/vault/secrets:batchGet", map[string]any{"refs": refs}, &out); err != nil {
+		return nil, nil, err
+	}
+	found := make(map[string]Secret, len(out.Secrets))
+	for ref, j := range out.Secrets {
+		s, err := j.decode()
+		if err != nil {
+			return nil, nil, err
+		}
+		found[ref] = s
+	}
+	return found, out.Missing, nil
+}
+
+// DeleteSecret removes ref; deleting a missing ref succeeds. With
+// ifVersion > 0 it deletes only that version.
+func (c *Client) DeleteSecret(ctx context.Context, ref string, ifVersion int64) error {
+	return mapSecretError(c.doWithHeaders(ctx, http.MethodDelete, secretPath(ref), nil, ifMatch(ifVersion), nil))
 }
 
 // EventRepository is the storage interface for domain events.

@@ -82,6 +82,23 @@ matches, e.g. after expiry) are sentinel-checkable with `errors.Is`. Backed
 by the same store as events (HTTP in esb-server mode, a local `locks`
 SQLite table in embedded mode).
 
+## Secrets and personal data
+
+- `wire.App.Secrets` (`domain.SecretReader`) reads configuration secrets —
+  DSNs, private keys, tokens. esb-server mode reads the ESB vault
+  (`/vault/secrets`); embedded mode reads `SECRET_<REF>` env vars (ref
+  `billing/db/dsn` → `SECRET_BILLING_DB_DSN`). Never hard-code secrets or
+  put them in events.
+- Personal data goes in `Event.Protected` (`"type:id"` subject → JSON
+  object), never in `Data`. Check read values with `domain.VaultErrorCode`:
+  a shredded subject comes back as a `key_shredded` marker.
+  `wire.App.Shredder.ShredSubjects` erases a subject. Subject IDs are stored
+  in plaintext: use opaque internal IDs, never emails or phone numbers.
+- In esb-server mode the ESB vault encrypts `Protected` per subject; the
+  token needs `vault:encrypt`/`vault:decrypt` (`ESB_SCOPES`, default) and
+  `vault:shred` to shred. Embedded mode stores it **unencrypted** — fine for
+  development, not for real personal data.
+
 ## Testing command methods
 
 Use the `testkit` package + `eventstore.NewFakeStore()` (an in-memory

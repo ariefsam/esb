@@ -1,0 +1,16 @@
+package domain
+
+import "{{.ModuleName}}/eventstore"
+
+// Vault types, aliased so domain code imports only this package. See
+// eventstore/vault.go.
+type Secret = eventstore.Secret
+type SecretReader = eventstore.SecretReader
+type Shredder = eventstore.Shredder
+
+// ErrSecretNotFound is returned by SecretReader for a missing ref.
+var ErrSecretNotFound = eventstore.ErrSecretNotFound
+
+// VaultErrorCode reports whether an Event.Protected value is an error
+// marker (e.g. "key_shredded") instead of plaintext.
+var VaultErrorCode = eventstore.VaultErrorCode

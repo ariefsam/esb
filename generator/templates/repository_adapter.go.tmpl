@@ -26,6 +26,7 @@ func (a *EventStoreAdapter) StoreAtomic(ctx context.Context, e eventstore.Event,
 		Data:            e.Data,
 		ExpectedVersion: expectedVersion,
 		IdempotencyKey:  e.IdempotencyKey,
+		Protected:       e.Protected,
 	})
 }
 
@@ -59,4 +60,9 @@ func (a *EventStoreAdapter) RefreshLock(ctx context.Context, key, ownerToken str
 
 func (a *EventStoreAdapter) GetLock(ctx context.Context, key string) (eventstore.Lock, error) {
 	return a.client.GetLock(ctx, key)
+}
+
+// ShredSubjects implements eventstore.Shredder.
+func (a *EventStoreAdapter) ShredSubjects(ctx context.Context, subjects ...string) ([]string, error) {
+	return a.client.ShredSubjects(ctx, subjects...)
 }
