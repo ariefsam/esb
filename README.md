@@ -16,6 +16,33 @@ macOS, Windows) juga dilampirkan di halaman GitHub Releases untuk setiap tag.
 
 ---
 
+## Client Library
+
+Paket `github.com/ariefsam/esb/client` adalah client Go untuk HTTP API ESB server, bisa dipakai dari aplikasi apa pun tanpa `esb init`: event, snapshot, KV, distributed lock, vault (`Protected`, shred, secret), dan panggilan admin.
+
+```bash
+go get github.com/ariefsam/esb/client
+```
+
+```go
+key := loadECDSAPrivateKey() // P-256; public key-nya didaftarkan di ESB (/ui/keys)
+c := client.NewProjectClient("https://esb.example.com", "tenant-1", "project-1", key, "my-app")
+
+ev, err := c.Store(ctx, client.StoreRequest{
+    AggregateName: "order", AggregateID: "ord-1", EventName: "OrderPlaced",
+    Data: json.RawMessage(`{"total":150000}`),
+})
+dsn, err := c.GetSecret(ctx, "billing/db/dsn")             // vault secret
+_, err = c.WithScopes(client.ScopeVaultShred).ShredSubjects(ctx, "customer:c-1")
+
+admin := client.NewAdminClient("https://esb.example.com", adminKey, "my-app")
+tenants, err := admin.ListTenants(ctx)
+```
+
+Versinya mengikuti tag esb. Proyek hasil `esb init` tetap membawa salinan client sendiri di `eventstore/client.go`, supaya kodenya bisa diubah dan mode embedded tetap jalan; paket ini untuk aplikasi di luar itu.
+
+---
+
 ## Quick Start
 
 ```bash
