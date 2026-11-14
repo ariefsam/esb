@@ -140,6 +140,13 @@ const CreateOnlyExpectedVersion int64 = -1
 
 // StoreRequest is the request body for [Client.Store].
 type StoreRequest struct {
+	// Partition splits the project's events further, e.g. by an
+	// application's customers: versions are per partition and aggregate,
+	// so two partitions may both have aggregate "o-1". Up to 64 letters,
+	// digits, dots, dashes and underscores; "" (the default) is the
+	// default partition. Optional.
+	Partition string `json:"partition,omitempty"`
+
 	// AggregateName is the type of the aggregate, e.g. "order". Required.
 	AggregateName string `json:"aggregate_name"`
 
@@ -193,6 +200,9 @@ type Event struct {
 
 	// EventID is the server-assigned unique identifier (shortid format).
 	EventID string `json:"EventID"`
+
+	// Partition is the partition the event was stored in ("" the default).
+	Partition string `json:"Partition,omitempty"`
 
 	// AggregateName is the type of the aggregate.
 	AggregateName string `json:"AggregateName"`
@@ -299,6 +309,35 @@ func (c *Client) Events(ctx context.Context, aggregateID, aggregateName string, 
 	q.Set("after_version", strconv.FormatInt(afterVersion, 10))
 	var events []Event
 	err := c.do(ctx, http.MethodGet, "/events?"+q.Encode(), nil, &events)
+	return events, err
+}
+
+// EventsIn is [Client.Events] in partition ("" the default partition).
+func (c *Client) EventsIn(ctx context.Context, partition, aggregateID, aggregateName string, afterVersion int64) ([]Event, error) {
+	q := url.Values{}
+	q.Set("partition", partition)
+	q.Set("aggregate_id", aggregateID)
+	q.Set("aggregate_name", aggregateName)
+	q.Set("after_version", strconv.FormatInt(afterVersion, 10))
+	var events []Event
+	err := c.do(ctx, http.MethodGet, "/events?"+q.Encode(), nil, &events)
+	return events, err
+}
+
+// EventsAllIn is [Client.EventsAll] of one partition only ("" the default
+// partition); EventsAll returns every partition's events.
+func (c *Client) EventsAllIn(ctx context.Context, aggregateNames []string, partition string, afterID uint, limit int) ([]Event, error) {
+	q := url.Values{}
+	if len(aggregateNames) > 0 {
+		q.Set("aggregate_names", strings.Join(aggregateNames, ","))
+	}
+	q.Set("partition", partition)
+	q.Set("after_id", strconv.FormatUint(uint64(afterID), 10))
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var events []Event
+	err := c.do(ctx, http.MethodGet, "/events/all?"+q.Encode(), nil, &events)
 	return events, err
 }
 
@@ -563,6 +602,28 @@ type Project struct {
 	Name      string `json:"Name"`
 	Active    bool   `json:"Active"`
 	CreatedAt int64  `json:"CreatedAt"`
+
+	// ArchiveState is "" for a live project, then "archiving",
+	// "archived" or "restoring" (see [Client.ArchiveProject]).
+	ArchiveState  string `json:"ArchiveState"`
+	ArchivedAt    int64  `json:"ArchivedAt"`
+	ArchiveCodec  string `json:"ArchiveCodec"`
+	ArchiveBytes  int64  `json:"ArchiveBytes"`
+	OriginalBytes int64  `json:"OriginalBytes"`
+	ArchiveRemote string `json:"ArchiveRemote"` // gs:// URI of the off-site copy, if any
+	ArchiveError  string `json:"ArchiveError"`  // why the last archive or restore failed
+}
+
+// DeletePartition deletes every event of one partition of a project by
+// calling DELETE /admin/tenants/{tenantID}/projects/{projectID}/partitions/{partition},
+// and returns how many. The default partition cannot be deleted.
+// Requires an admin-realm client (see [NewAdminClient]).
+func (c *Client) DeletePartition(ctx context.Context, tenantID, projectID, partition string) (int64, error) {
+	var out struct {
+		Deleted int64 `json:"deleted"`
+	}
+	err := c.do(ctx, http.MethodDelete, "/admin/tenants/"+url.PathEscape(tenantID)+"/projects/"+url.PathEscape(projectID)+"/partitions/"+url.PathEscape(partition), nil, &out)
+	return out.Deleted, err
 }
 
 // CreateTenant creates a new tenant by calling POST /admin/tenants.
@@ -598,6 +659,39 @@ func (c *Client) ListProjects(ctx context.Context, tenantID string) ([]Project, 
 	var ps []Project
 	err := c.do(ctx, http.MethodGet, "/admin/tenants/"+tenantID+"/projects", nil, &ps)
 	return ps, err
+}
+
+// GetProject returns one project by calling
+// GET /admin/tenants/{tenantID}/projects/{projectID}.
+// Requires an admin-realm client (see [NewAdminClient]).
+func (c *Client) GetProject(ctx context.Context, tenantID, projectID string) (Project, error) {
+	var p Project
+	err := c.do(ctx, http.MethodGet, "/admin/tenants/"+url.PathEscape(tenantID)+"/projects/"+url.PathEscape(projectID), nil, &p)
+	return p, err
+}
+
+// ArchiveProject starts archiving a project by calling
+// POST /admin/tenants/{tenantID}/projects/{projectID}/archive. The project
+// DB is compressed into one file and removed; the project rejects tenant
+// requests (403) until restored. The job runs in the background: poll
+// [Client.GetProject] until ArchiveState is "archived", or "" with
+// ArchiveError set if it failed.
+// Requires an admin-realm client (see [NewAdminClient]).
+func (c *Client) ArchiveProject(ctx context.Context, tenantID, projectID string) (Project, error) {
+	var p Project
+	err := c.do(ctx, http.MethodPost, "/admin/tenants/"+url.PathEscape(tenantID)+"/projects/"+url.PathEscape(projectID)+"/archive", nil, &p)
+	return p, err
+}
+
+// RestoreProject starts restoring an archived project by calling
+// POST /admin/tenants/{tenantID}/projects/{projectID}/restore. Poll
+// [Client.GetProject] until ArchiveState is "", or "archived" with
+// ArchiveError set if it failed.
+// Requires an admin-realm client (see [NewAdminClient]).
+func (c *Client) RestoreProject(ctx context.Context, tenantID, projectID string) (Project, error) {
+	var p Project
+	err := c.do(ctx, http.MethodPost, "/admin/tenants/"+url.PathEscape(tenantID)+"/projects/"+url.PathEscape(projectID)+"/restore", nil, &p)
+	return p, err
 }
 
 // Lock is the server representation of a mutex lock returned by the API.

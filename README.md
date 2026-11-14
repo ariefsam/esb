@@ -18,7 +18,7 @@ macOS, Windows) juga dilampirkan di halaman GitHub Releases untuk setiap tag.
 
 ## Client Library
 
-Paket `github.com/ariefsam/esb/client` adalah client Go untuk HTTP API ESB server, bisa dipakai dari aplikasi apa pun tanpa `esb init`: event, snapshot, KV, distributed lock, vault (`Protected`, shred, secret), dan panggilan admin.
+Paket `github.com/ariefsam/esb/client` adalah client Go untuk HTTP API ESB server, bisa dipakai dari aplikasi apa pun tanpa `esb init`: event (termasuk partition), snapshot, KV, distributed lock, vault (`Protected`, shred, secret), dan panggilan admin (termasuk arsip/restore project).
 
 ```bash
 go get github.com/ariefsam/esb/client
@@ -35,8 +35,12 @@ ev, err := c.Store(ctx, client.StoreRequest{
 dsn, err := c.GetSecret(ctx, "billing/db/dsn")             // vault secret
 _, err = c.WithScopes(client.ScopeVaultShred).ShredSubjects(ctx, "customer:c-1")
 
+evs, err := c.EventsIn(ctx, "cust-1", "ord-1", "order", 0)    // satu partition saja
+
 admin := client.NewAdminClient("https://esb.example.com", adminKey, "my-app")
 tenants, err := admin.ListTenants(ctx)
+p, err := admin.ArchiveProject(ctx, "tenant-1", "project-1")  // 202, jalan di background
+p, err = admin.GetProject(ctx, "tenant-1", "project-1")       // poll sampai ArchiveState == "archived"
 ```
 
 Versinya mengikuti tag esb. Proyek hasil `esb init` tetap membawa salinan client sendiri di `eventstore/client.go`, supaya kodenya bisa diubah dan mode embedded tetap jalan; paket ini untuk aplikasi di luar itu.

@@ -317,3 +317,109 @@ func TestClient_AdminSecretAudit(t *testing.T) {
 		t.Fatalf("SecretAudit = %+v, %d, %v", entries, next, err)
 	}
 }
+
+func TestClient_Partitions(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/events/store":
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["partition"] != "cust-1" {
+				t.Errorf("store partition = %v", body["partition"])
+			}
+			writeJSON(w, http.StatusCreated, client.Event{EventID: "evt-1", Version: 1, Partition: "cust-1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			if q := r.URL.Query(); q.Get("partition") != "cust-1" || q.Get("aggregate_id") != "o1" {
+				t.Errorf("events query = %v", q)
+			}
+			writeJSON(w, http.StatusOK, []client.Event{{EventID: "evt-1", Partition: "cust-1"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events/all":
+			if q := r.URL.Query(); !q.Has("partition") || q.Get("partition") != "" || q.Get("after_id") != "5" {
+				t.Errorf("events/all query = %v", q)
+			}
+			writeJSON(w, http.StatusOK, []client.Event{})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	c := client.NewProjectClient(srv.URL, "t1", "p1", generateKey(t), "app")
+	ctx := context.Background()
+
+	e, err := c.Store(ctx, client.StoreRequest{AggregateName: "order", AggregateID: "o1", EventName: "Placed", Partition: "cust-1"})
+	if err != nil || e.Partition != "cust-1" {
+		t.Fatalf("Store = %+v, %v", e, err)
+	}
+	evts, err := c.EventsIn(ctx, "cust-1", "o1", "order", 0)
+	if err != nil || len(evts) != 1 || evts[0].Partition != "cust-1" {
+		t.Fatalf("EventsIn = %+v, %v", evts, err)
+	}
+	// "" selects the default partition explicitly, unlike EventsAll.
+	if _, err := c.EventsAllIn(ctx, nil, "", 5, 0); err != nil {
+		t.Fatalf("EventsAllIn: %v", err)
+	}
+}
+
+func TestClient_AdminDeletePartition(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		expect(t, r, http.MethodDelete, "/admin/tenants/t1/projects/p1/partitions/cust-1")
+		if claims(t, r)["realm"] != "admin" {
+			t.Error("admin realm expected")
+		}
+		writeJSON(w, http.StatusOK, map[string]int64{"deleted": 3})
+	})
+	admin := client.NewAdminClient(srv.URL, generateKey(t), "")
+
+	n, err := admin.DeletePartition(context.Background(), "t1", "p1", "cust-1")
+	if err != nil || n != 3 {
+		t.Fatalf("DeletePartition = %d, %v", n, err)
+	}
+}
+
+func TestClient_AdminArchiveRestore(t *testing.T) {
+	state := ""
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if claims(t, r)["realm"] != "admin" {
+			t.Error("admin realm expected")
+		}
+		base := "/admin/tenants/t1/projects/p1"
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == base+"/archive":
+			if state != "" {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "project is " + state})
+				return
+			}
+			state = "archiving"
+			writeJSON(w, http.StatusAccepted, client.Project{ID: "p1", TenantID: "t1", ArchiveState: state})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			if state == "archiving" {
+				state = "archived"
+			}
+			writeJSON(w, http.StatusOK, client.Project{ID: "p1", TenantID: "t1", ArchiveState: state,
+				ArchiveCodec: "zstd-better-w8m", ArchiveBytes: 29, OriginalBytes: 87,
+				ArchiveRemote: "gs://bucket/archives/t1/p1/x.db.zst"})
+		case r.Method == http.MethodPost && r.URL.Path == base+"/restore":
+			state = "restoring"
+			writeJSON(w, http.StatusAccepted, client.Project{ID: "p1", TenantID: "t1", ArchiveState: state})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	admin := client.NewAdminClient(srv.URL, generateKey(t), "")
+	ctx := context.Background()
+
+	p, err := admin.ArchiveProject(ctx, "t1", "p1")
+	if err != nil || p.ArchiveState != "archiving" {
+		t.Fatalf("ArchiveProject = %+v, %v", p, err)
+	}
+	if _, err := admin.ArchiveProject(ctx, "t1", "p1"); err == nil {
+		t.Fatal("second ArchiveProject: want 409 error")
+	}
+	p, err = admin.GetProject(ctx, "t1", "p1")
+	if err != nil || p.ArchiveState != "archived" || p.ArchiveCodec != "zstd-better-w8m" || p.ArchiveRemote == "" {
+		t.Fatalf("GetProject = %+v, %v", p, err)
+	}
+	p, err = admin.RestoreProject(ctx, "t1", "p1")
+	if err != nil || p.ArchiveState != "restoring" {
+		t.Fatalf("RestoreProject = %+v, %v", p, err)
+	}
+}
