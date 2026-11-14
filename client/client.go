@@ -1,6 +1,6 @@
 // Package client provides a typed Go client for the event-sourcing-builder
 // (ESB) HTTP API: events, snapshots, KV, distributed locks, the vault
-// (protected data, shredding, secrets) and admin calls.
+// (protected data, shredding, secrets), ephemeral pub/sub and admin calls.
 //
 //	go get github.com/ariefsam/esb/client
 //
@@ -24,6 +24,11 @@
 //	// long-poll for new events
 //	events, err := c.EventsAll(ctx, []string{"order"}, 0, 50)
 //
+//	// ephemeral pub/sub (SSE, falling back to long polling)
+//	_, err = c.Publish(ctx, "cache/invalidate", map[string]string{"key": "k1"})
+//	err = c.Subscribe(ctx, client.SubscribeOptions{Topics: []string{"cache/invalidate"}},
+//	    func(m client.Message) error { return nil })
+//
 // Admin usage:
 //
 //	admin := client.NewAdminClient("http://localhost:8080", key, "my-issuer")
@@ -31,6 +36,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -45,6 +51,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -458,6 +465,20 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("server error %d: %s", e.StatusCode, e.Message)
 }
 
+// newHTTPError reads an error response: the "error" field of a JSON body,
+// or the body as text (e.g. "forbidden: project is archived").
+func newHTTPError(resp *http.Response) *HTTPError {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	msg := strings.TrimSpace(string(b))
+	if json.Unmarshal(b, &errBody) == nil {
+		msg = errBody.Error
+	}
+	return &HTTPError{StatusCode: resp.StatusCode, Message: msg}
+}
+
 // ErrKVNotFound is returned by [Client.KVGet] when the key does not exist or
 // has expired. Check with errors.Is(err, client.ErrKVNotFound).
 var ErrKVNotFound = errors.New("kv: key not found or expired")
@@ -549,9 +570,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body an
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var errBody map[string]string
-		json.NewDecoder(resp.Body).Decode(&errBody)
-		return resp.Header, &HTTPError{StatusCode: resp.StatusCode, Message: errBody["error"]}
+		return resp.Header, newHTTPError(resp)
 	}
 
 	if out != nil {
@@ -1047,4 +1066,360 @@ func (c *Client) SecretAudit(ctx context.Context, tenantID, projectID, ref strin
 		return nil, 0, err
 	}
 	return out.Entries, out.NextBeforeID, nil
+}
+
+// ── Pub/sub ──────────────────────────────────────────────────────────────────
+
+// Message is one pub/sub message. Messages are ephemeral: the server
+// keeps them in memory for a few minutes (at most 1000 or 4 MB per
+// project) so subscribers can resume after a reconnect, and never stores
+// them. ID is the cursor to resume after this message (see
+// [SubscribeOptions].Cursor).
+type Message struct {
+	ID          string          `json:"id"`
+	Topic       string          `json:"topic"`
+	Data        json.RawMessage `json:"data"`
+	PublishedAt int64           `json:"published_at"` // unix ms
+}
+
+// ErrSubscriptionClosed is returned by [Client.Subscribe] when the server
+// ends the subscription for good, e.g. because the project was archived.
+var ErrSubscriptionClosed = errors.New("pubsub: subscription closed by the server")
+
+// Publish sends data to every current subscriber of topic in this
+// project by calling POST /pubsub/publish. data is marshalled to JSON
+// (a json.RawMessage or []byte of JSON is sent as is) and may be at most
+// 64 KB. Topics are 1-128 letters, digits and . _ : / -.
+//
+// Delivery is at most once: a subscriber that is not connected, or falls
+// more than the server's buffer behind, misses the message and is told so
+// through [SubscribeOptions].OnGap. Use events ([Client.Store]) for
+// anything that must not be lost.
+func (c *Client) Publish(ctx context.Context, topic string, data any) (Message, error) {
+	var raw json.RawMessage
+	switch v := data.(type) {
+	case json.RawMessage:
+		raw = v
+	case []byte:
+		raw = v
+	default:
+		b, err := json.Marshal(data)
+		if err != nil {
+			return Message{}, fmt.Errorf("marshal data: %w", err)
+		}
+		raw = b
+	}
+	body := struct {
+		Topic string          `json:"topic"`
+		Data  json.RawMessage `json:"data"`
+	}{topic, raw}
+	var m Message
+	err := c.do(ctx, http.MethodPost, "/pubsub/publish", body, &m)
+	return m, err
+}
+
+// Transport selects how [Client.Subscribe] receives messages.
+type Transport int
+
+const (
+	// TransportAuto uses Server-Sent Events and falls back to long
+	// polling when streaming does not work (a proxy that buffers the
+	// response, or a server without /pubsub/stream).
+	TransportAuto Transport = iota
+	// TransportSSE uses Server-Sent Events only (GET /pubsub/stream).
+	TransportSSE
+	// TransportLongPoll uses long polling only (GET /pubsub/poll).
+	TransportLongPoll
+)
+
+// SubscribeOptions configures [Client.Subscribe].
+type SubscribeOptions struct {
+	// Topics to receive; empty receives every topic of the project.
+	Topics []string
+	// Transport defaults to TransportAuto.
+	Transport Transport
+	// Cursor resumes after a message: pass the ID of the last message
+	// handled. "" starts from now.
+	Cursor string
+	// OnGap is called when messages were lost: the subscriber was
+	// disconnected longer than the server keeps messages, or the server
+	// restarted. Optional.
+	OnGap func()
+	// ReadyTimeout bounds how long a stream may take to start (default
+	// 10 s). In TransportAuto, two streams that do not start switch to
+	// long polling.
+	ReadyTimeout time.Duration
+	// IdleTimeout reconnects a stream that has sent nothing, not even a
+	// heartbeat, for this long (default 45 s; the server pings every 15 s).
+	IdleTimeout time.Duration
+}
+
+// Subscribe receives the project's pub/sub messages and calls fn for
+// each, in publish order. It blocks until ctx ends (returning ctx.Err()),
+// fn returns an error (returned as is), the server refuses the
+// subscription (*HTTPError, e.g. 403) or ends it ([ErrSubscriptionClosed]).
+//
+// Connection failures are retried with backoff (0.5 s up to 10 s) and
+// resume after the last message handled, so nothing still buffered on
+// the server is missed or delivered twice. fn runs on Subscribe's
+// goroutine; a slow fn only makes this subscriber fall behind.
+//
+//	err := c.Subscribe(ctx, client.SubscribeOptions{Topics: []string{"cache/invalidate"}},
+//	    func(m client.Message) error {
+//	        var key string
+//	        json.Unmarshal(m.Data, &key)
+//	        cache.Delete(key)
+//	        return nil
+//	    })
+func (c *Client) Subscribe(ctx context.Context, opts SubscribeOptions, fn func(Message) error) error {
+	if opts.ReadyTimeout <= 0 {
+		opts.ReadyTimeout = 10 * time.Second
+	}
+	if opts.IdleTimeout <= 0 {
+		opts.IdleTimeout = 45 * time.Second
+	}
+	s := &subscription{c: c, opts: opts, fn: fn, cursor: opts.Cursor}
+	mode := opts.Transport
+	streamFailures := 0
+	backoff := 500 * time.Millisecond
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var started bool
+		var err error
+		if mode == TransportLongPoll {
+			started, err = s.poll(ctx)
+		} else {
+			started, err = s.stream(ctx)
+			if mode == TransportAuto {
+				var he *HTTPError
+				switch {
+				case errors.Is(err, errNotEventStream),
+					errors.As(err, &he) && (he.StatusCode == http.StatusNotFound || he.StatusCode == http.StatusMethodNotAllowed):
+					mode = TransportLongPoll
+					continue
+				case started:
+					streamFailures = 0
+				case err != nil && !isFatalSubscribeError(err):
+					if streamFailures++; streamFailures >= 2 {
+						mode = TransportLongPoll
+						continue
+					}
+				}
+			}
+		}
+		if err == nil {
+			backoff = 500 * time.Millisecond
+			continue // stream ended normally (max age) or poll answered
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if isFatalSubscribeError(err) {
+			var he *handlerError
+			if errors.As(err, &he) {
+				return he.err
+			}
+			return err
+		}
+		if started {
+			backoff = 500 * time.Millisecond
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		backoff = min(backoff*2, 10*time.Second)
+	}
+}
+
+var (
+	errNotEventStream = errors.New("pubsub: response is not an event stream")
+	errStreamStalled  = errors.New("pubsub: stream stalled")
+)
+
+// handlerError wraps an error returned by the Subscribe callback.
+type handlerError struct{ err error }
+
+func (e *handlerError) Error() string { return e.err.Error() }
+
+func isFatalSubscribeError(err error) bool {
+	var he *handlerError
+	if errors.As(err, &he) || errors.Is(err, ErrSubscriptionClosed) {
+		return true
+	}
+	var hte *HTTPError
+	if errors.As(err, &hte) {
+		switch hte.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests:
+			return false
+		}
+		return hte.StatusCode >= 400 && hte.StatusCode < 500
+	}
+	return false
+}
+
+type subscription struct {
+	c      *Client
+	opts   SubscribeOptions
+	fn     func(Message) error
+	cursor string
+}
+
+func (s *subscription) query() url.Values {
+	q := url.Values{}
+	if len(s.opts.Topics) > 0 {
+		q.Set("topics", strings.Join(s.opts.Topics, ","))
+	}
+	if s.cursor != "" {
+		q.Set("cursor", s.cursor)
+	}
+	return q
+}
+
+func (s *subscription) deliver(m Message) error {
+	if err := s.fn(m); err != nil {
+		return &handlerError{err}
+	}
+	s.cursor = m.ID
+	return nil
+}
+
+// poll makes one GET /pubsub/poll (the server waits up to 30 s).
+func (s *subscription) poll(ctx context.Context) (bool, error) {
+	var out struct {
+		Messages []Message `json:"messages"`
+		Cursor   string    `json:"cursor"`
+		Gap      bool      `json:"gap"`
+	}
+	q := s.query()
+	q.Set("limit", "100")
+	if err := s.c.do(ctx, http.MethodGet, "/pubsub/poll?"+q.Encode(), nil, &out); err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && he.StatusCode == http.StatusGone {
+			return false, ErrSubscriptionClosed
+		}
+		return false, err
+	}
+	if out.Gap && s.opts.OnGap != nil {
+		s.opts.OnGap()
+	}
+	for _, m := range out.Messages {
+		if err := s.deliver(m); err != nil {
+			return true, err
+		}
+	}
+	s.cursor = out.Cursor
+	return true, nil
+}
+
+// stream reads one SSE connection to its end. started reports whether
+// the server's "ready" event arrived.
+func (s *subscription) stream(ctx context.Context) (started bool, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.c.baseURL+"/pubsub/stream?"+s.query().Encode(), nil)
+	if err != nil {
+		return false, err
+	}
+	token, err := s.c.signedToken()
+	if err != nil {
+		return false, fmt.Errorf("sign token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Cache-Control", "no-cache")
+	if s.cursor != "" {
+		req.Header.Set("Last-Event-ID", s.cursor)
+	}
+
+	// The watchdog cancels a stream that does not start, or goes quiet
+	// (the server pings every 15 s). The client's own Timeout would cut
+	// every stream, so streams use a client without one.
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(s.opts.ReadyTimeout, func() { stalled.Store(true); cancel() })
+	defer watchdog.Stop()
+
+	resp, err := (&http.Client{Transport: s.c.httpClient.Transport}).Do(req)
+	if err != nil {
+		if stalled.Load() {
+			return false, errStreamStalled
+		}
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return false, newHTTPError(resp)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		return false, errNotEventStream
+	}
+
+	r := bufio.NewReader(resp.Body)
+	var id, event, data string
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			switch {
+			case stalled.Load():
+				return started, errStreamStalled
+			case ctx.Err() != nil:
+				return started, ctx.Err()
+			case err == io.EOF && started:
+				return true, nil // server ended the stream; reconnect
+			case err == io.EOF:
+				return false, io.ErrUnexpectedEOF
+			}
+			return started, err
+		}
+		if started {
+			watchdog.Reset(s.opts.IdleTimeout)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		switch {
+		case strings.HasPrefix(line, ":"):
+			continue // heartbeat
+		case strings.HasPrefix(line, "id:"):
+			id = strings.TrimSpace(line[3:])
+			continue
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(line[6:])
+			continue
+		case strings.HasPrefix(line, "data:"):
+			data = strings.TrimSpace(line[5:])
+			continue
+		case line != "":
+			continue // unknown field
+		}
+
+		// Blank line: dispatch the event.
+		switch event {
+		case "ready":
+			started = true
+			watchdog.Reset(s.opts.IdleTimeout)
+			if id != "" {
+				s.cursor = id
+			}
+		case "message":
+			var m Message
+			if err := json.Unmarshal([]byte(data), &m); err != nil {
+				return started, fmt.Errorf("pubsub: decode message: %w", err)
+			}
+			if err := s.deliver(m); err != nil {
+				return started, err
+			}
+		case "gap":
+			if s.opts.OnGap != nil {
+				s.opts.OnGap()
+			}
+			if id != "" {
+				s.cursor = id
+			}
+		case "closed":
+			return started, ErrSubscriptionClosed
+		}
+		id, event, data = "", "", ""
+	}
 }
